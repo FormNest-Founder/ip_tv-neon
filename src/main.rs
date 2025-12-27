@@ -1,13 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufRead};
-use std::path::Path;
+use std::path::{Path};
 use std::process::{Command, Stdio};
 use std::sync::{atomic::{AtomicBool, Ordering}, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration};
 
 use anyhow::Result;
+use bincode;
 use chrono::{DateTime, Local, Utc, NaiveDateTime};
 use clap::{Parser, Subcommand};
 use crossterm::{
@@ -62,7 +63,7 @@ impl Config {
     fn load() -> Self {
         let p = dirs::config_dir().unwrap_or_else(|| ".".into()).join("neon-iptv/config.json");
         let mut cfg: Config = fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        if cfg.epg_url.contains("it999.ru") || cfg.epg_url.contains("github.com") { cfg.epg_url = RECOMMENDED_EPG.into(); let _ = cfg.save(); }
+        if cfg.epg_url.contains("it999.ru") { cfg.epg_url = RECOMMENDED_EPG.into(); let _ = cfg.save(); }
         cfg
     }
     fn save(&self) -> Result<()> {
@@ -126,7 +127,7 @@ async fn update_data(config: &Config) -> Result<()> {
     for line in m3u.lines() {
         if line.starts_with("#EXTINF:") {
             let tid = re_id.captures(line).map(|c| c[1].to_string()); let tname = re_name.captures(line).map(|c| c[1].to_string());
-            let name = line.split(',').next_back().unwrap_or("").trim().to_string();
+            let name = line.split(',').last().unwrap_or("").trim().to_string();
             let norm = normalize(&name);
             channels.push(Channel { name, group: cur_grp.clone(), url: "".into(), tvg_id: tid.or(tname), norm_name: norm });
         } else if let Some(g) = line.strip_prefix("#EXTGRP:") { cur_grp = g.trim().to_string(); groups.insert(cur_grp.clone()); }
@@ -153,10 +154,10 @@ async fn update_data(config: &Config) -> Result<()> {
                 }
                 Ok(XmlEvent::Text(e)) => {
                     let text = e.unescape().unwrap_or_default().into_owned();
-                    if tag == "display-name" && (lang == "ru" || lang.is_empty() || !name_to_id.contains_key(&normalize(&text))) { name_to_id.insert(normalize(&text), cur_id.clone()); }
+                    if tag == "display-name" { if lang == "ru" || lang.is_empty() || !name_to_id.contains_key(&normalize(&text)) { name_to_id.insert(normalize(&text), cur_id.clone()); } }
                     if let Some(p) = cur_prog.as_mut() {
-                        if tag == "title" && (lang == "ru" || p.title.is_empty()) { p.title = text; }
-                        else if tag == "desc" && (lang == "ru" || p.desc.is_empty()) { p.desc = text; }
+                        if tag == "title" { if lang == "ru" || p.title.is_empty() { p.title = text; } }
+                        else if tag == "desc" { if lang == "ru" || p.desc.is_empty() { p.desc = text; } }
                     }
                 }
                 Ok(XmlEvent::End(e)) => { if e.name().as_ref() == b"programme" && let Some(p) = cur_prog.take() { epg.entry(cur_id.clone()).or_default().push(p); } }
@@ -184,13 +185,24 @@ async fn fetch_radio_now() -> HashMap<i64, String> {
     map
 }
 
+fn find_epg_id(ch: &Channel, data: &AppData) -> Option<String> {
+    if let Some(id) = &ch.tvg_id && data.epg.contains_key(id) { return Some(id.clone()); }
+    if let Some(id) = data.name_to_id.get(&ch.norm_name) { return Some(id.clone()); }
+    if let Some(id) = ch.tvg_id.as_ref().and_then(|tid| data.name_to_id.get(&normalize(tid))) { return Some(id.clone()); }
+    None
+}
+
+fn get_current_epg<'a>(ch: &Channel, data: &'a AppData, now: i64) -> Option<&'a EpgProgram> {
+    let id = find_epg_id(ch, data)?;
+    data.epg.get(&id).and_then(|progs| progs.iter().find(|p| p.start <= now && p.stop > now))
+}
+
 #[derive(PartialEq)]
 enum Screen { MainMenu, CatList, ChanList, RadioList, Detail, Settings, Input, Updating }
 struct App {
     config: Config, data: AppData, screen: Screen,
     m_state: ListState, cat_state: ListState, ch_state: ListState, r_state: ListState, s_state: ListState,
     filtered: Vec<usize>, search: String, is_search: bool, in_buf: String, in_tgt: String, quit: bool, title: String,
-    chan_cache: Vec<String>,
 }
 impl App {
     fn new(config: Config) -> Self {
@@ -198,7 +210,6 @@ impl App {
         let mut app = Self {
             config, data, screen: Screen::MainMenu, m_state: ListState::default(), cat_state: ListState::default(), ch_state: ListState::default(), r_state: ListState::default(), s_state: ListState::default(),
             filtered: Vec::new(), search: "".into(), is_search: false, in_buf: "".into(), in_tgt: "".into(), quit: false, title: "".into(),
-            chan_cache: Vec::new(),
         };
         app.m_state.select(Some(0)); app
     }
@@ -206,7 +217,7 @@ impl App {
     fn run_mpv(&mut self, url: &str, title: &str, sub_title: &str, radio: bool) {
         self.stop_all();
         let display_title = if sub_title.is_empty() { title.to_string() } else { format!("{} │ {}", title, sub_title) };
-        let is_heavy = title.contains("4K") || title.contains("HDR") || sub_title.contains("4K");
+        let is_heavy = title.contains("4K") || title.contains("HDR");
         let mut c = Command::new("mpv");
         c.arg(url).arg("--ontop").arg(format!("--title=NEON: {}", display_title)).arg(format!("--force-media-title={}", display_title)).arg("--hwdec=vaapi").arg("--vo=gpu-next");
         if is_heavy { c.arg("--hdr-compute-peak=no").arg("--tone-mapping=bt.2390").arg("--scale=bilinear"); }
@@ -215,24 +226,6 @@ impl App {
         #[cfg(unix)] { use std::os::unix::process::CommandExt; unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); } }
         let _ = c.spawn();
     }
-    fn find_id(&self, ch: &Channel) -> Option<String> {
-        if let Some(id) = &ch.tvg_id && self.data.epg.contains_key(id) { return Some(id.clone()); }
-        if let Some(id) = self.data.name_to_id.get(&ch.norm_name) { return Some(id.clone()); }
-        if let Some(id) = ch.tvg_id.as_ref().and_then(|tid| self.data.name_to_id.get(&normalize(tid))) { return Some(id.clone()); }
-        None
-    }
-    fn get_epg(&self, ch: &Channel) -> Option<&EpgProgram> {
-        let now = Utc::now().timestamp();
-        let id = self.find_id(ch)?;
-        self.data.epg.get(&id).and_then(|progs| progs.iter().find(|p| p.start <= now && p.stop > now))
-    }
-    fn refresh_chan_cache(&mut self) {
-        self.chan_cache = self.filtered.iter().map(|&idx| {
-            let ch = &self.data.channels[idx]; let mut line = ch.name.clone();
-            if let Some(p) = self.get_epg(ch) { line.push_str(&format!("  │  NOW: {}", p.title)); }
-            line
-        }).collect();
-    }
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -240,31 +233,53 @@ fn ui(f: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Updating => { f.render_widget(Paragraph::new("\n\n🚀 UPDATING DATA...\nPLEASE WAIT...").alignment(Alignment::Center).fg(Color::Yellow).bold(), area); }
         Screen::MainMenu => {
-            let chunks = Layout::default().constraints([Constraint::Length(8), Constraint::Min(0)]).split(area); f.render_widget(Paragraph::new("   NEON HUB\n   V 0.5.0").alignment(Alignment::Center).fg(Color::Cyan), chunks[0]);
+            let chunks = Layout::default().constraints([Constraint::Length(8), Constraint::Min(0)]).split(area); f.render_widget(Paragraph::new("   NEON HUB\n   V 0.6.0").alignment(Alignment::Center).fg(Color::Cyan), chunks[0]);
             let items = ["📺 IPTV", "📻 RADIO", "⭐ FAVORITES", "🕒 HISTORY", "⏹ STOP ALL", "🔄 UPDATE", "⚙️ SETTINGS", "🚪 EXIT"];
             let list = List::new(items.iter().map(|i| ListItem::new(*i)).collect::<Vec<_>>()).highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black)); f.render_stateful_widget(list, chunks[1], &mut app.m_state);
         }
         Screen::CatList => { let list = List::new(app.data.groups.iter().map(|g| ListItem::new(format!("📂 {}", g))).collect::<Vec<_>>()).block(Block::default().title(" Categories ")).highlight_style(Style::default().bg(Color::Magenta).fg(Color::Black)); f.render_stateful_widget(list, area, &mut app.cat_state); }
         Screen::ChanList => {
             let chunks = Layout::default().constraints([Constraint::Min(0), Constraint::Length(3)]).split(area);
-            let items: Vec<ListItem> = app.chan_cache.iter().enumerate().map(|(i, line)| {
-                let idx = app.filtered[i]; let ch = &app.data.channels[idx];
-                ListItem::new(line.as_str()).style(if app.config.favorites.contains(&ch.url) { Style::default().fg(Color::Yellow) } else { Style::default() })
+            let now = Utc::now().timestamp();
+            let items: Vec<ListItem> = app.filtered.iter().map(|&idx| {
+                let ch = &app.data.channels[idx];
+                let mut spans = Vec::new();
+                if let Some(cap) = Regex::new(r"^(BCU|BOX|VF|YOSSO|VIP)\s+").unwrap().captures(&ch.name) {
+                    spans.push(Span::styled(format!("{} ", &cap[1]), Style::default().fg(Color::Cyan).bold()));
+                    spans.push(Span::styled(&ch.name[cap[0].len()..], Style::default().fg(Color::White)));
+                } else { spans.push(Span::styled(&ch.name, Style::default().fg(Color::White))); }
+                if ch.name.contains("4K") { spans.push(Span::styled(" [4K]", Style::default().fg(Color::Red).bold())); }
+                else if ch.name.contains("HD") || ch.name.contains("FHD") { spans.push(Span::styled(" [HD]", Style::default().fg(Color::Green))); }
+                if let Some(p) = get_current_epg(ch, &app.data, now) { spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray))); spans.push(Span::styled(format!("NOW: {}", p.title), Style::default().fg(Color::Magenta))); }
+                ListItem::new(Line::from(spans))
             }).collect();
-            let list = List::new(items).block(Block::default().title(app.title.as_str()).borders(Borders::ALL)).highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
+            let list = List::new(items).block(Block::default().title(app.title.as_str()).borders(Borders::ALL)).highlight_style(Style::default().bg(Color::Rgb(30, 30, 50)));
             f.render_stateful_widget(list, chunks[0], &mut app.ch_state);
             f.render_widget(Paragraph::new(format!(" SEARCH: {}", app.search)).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow))), chunks[1]);
         }
         Screen::RadioList => {
-            let items: Vec<ListItem> = app.data.radio.iter().map(|r| { let mut line = r.title.clone(); if let Some(t) = &r.track { line.push_str(&format!("  │  NOW: {}", t)); } ListItem::new(line) }).collect();
-            let list = List::new(items).block(Block::default().title(" Radio Record ")).highlight_style(Style::default().bg(Color::Yellow).fg(Color::Black)); f.render_stateful_widget(list, area, &mut app.r_state);
+            let items: Vec<ListItem> = app.data.radio.iter().map(|r| {
+                let mut spans = vec![Span::styled(format!("󰓇 {} ", r.title), Style::default().fg(Color::Yellow).bold())];
+                if let Some(t) = &r.track { spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray))); spans.push(Span::styled(t.clone(), Style::default().fg(Color::Rgb(255, 0, 255)))); }
+                ListItem::new(Line::from(spans))
+            }).collect();
+            let list = List::new(items).block(Block::default().title(" Radio Record ")).highlight_style(Style::default().bg(Color::Rgb(50, 20, 50)));
+            f.render_stateful_widget(list, area, &mut app.r_state);
         }
         Screen::Detail => {
             let idx = app.filtered[app.ch_state.selected().unwrap_or(0)]; let ch = &app.data.channels[idx];
-            let chunks = Layout::default().constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)]).split(area); f.render_widget(Paragraph::new(format!("📺 {}", ch.name)).fg(Color::Cyan).bold(), chunks[0]);
-            let mut txt = "No EPG data found.".to_string();
-            if let Some(id) = app.find_id(ch) && let Some(progs) = app.data.epg.get(&id) { let now = Utc::now().timestamp(); let lines: Vec<_> = progs.iter().filter(|p| p.stop > now).take(8).map(|p| { let s = DateTime::<Utc>::from_timestamp(p.start, 0).unwrap().with_timezone(&Local).format("%H:%M"); format!("{} - {}", s, p.title) }).collect(); if !lines.is_empty() { txt = lines.join("\n"); } }
-            f.render_widget(Paragraph::new(txt).block(Block::default().title(" Schedule ").borders(Borders::ALL)), chunks[1]); f.render_widget(Paragraph::new("[ENTER] Play  [ESC] Back").alignment(Alignment::Center), chunks[2]);
+            let chunks = Layout::default().constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)]).split(area);
+            f.render_widget(Paragraph::new(format!("📺 {}", ch.name)).fg(Color::Cyan).bold(), chunks[0]);
+            let mut txt = "No description available.".to_string();
+            if let Some(id) = find_epg_id(ch, &app.data) && let Some(progs) = app.data.epg.get(&id) {
+                let now = Utc::now().timestamp(); let mut lines = Vec::new();
+                if let Some(p) = progs.iter().find(|p| p.start <= now && p.stop > now) { lines.push(format!("🎬 NOW: {}\n", p.title)); if !p.desc.is_empty() { lines.push(format!("📖 {}\n", p.desc)); } }
+                lines.push("\n📅 COMING UP:".into());
+                for p in progs.iter().filter(|p| p.start > now).take(5) { let s = DateTime::<Utc>::from_timestamp(p.start, 0).unwrap().with_timezone(&Local).format("%H:%M"); lines.push(format!("  {} - {}", s, p.title)); }
+                txt = lines.join("\n");
+            }
+            f.render_widget(Paragraph::new(txt).block(Block::default().title(" Schedule & Info ").borders(Borders::ALL)).wrap(Wrap { trim: true }), chunks[1]);
+            f.render_widget(Paragraph::new("[ENTER] Play  [ESC] Back").alignment(Alignment::Center), chunks[2]);
         }
         Screen::Settings => { let items = [format!("Playlist: {}", app.config.playlist_url), format!("EPG: {}", app.config.epg_url), "Save & Exit".into()]; let list = List::new(items.iter().map(|i| ListItem::new(i.as_str())).collect::<Vec<_>>()).highlight_style(Style::default().bg(Color::Yellow).fg(Color::Black)); f.render_stateful_widget(list, area, &mut app.s_state); }
         Screen::Input => {
@@ -282,45 +297,37 @@ async fn main() -> Result<()> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
         if event::poll(Duration::from_millis(100))? && let Event::Key(key) = event::read()? && key.kind == KeyEventKind::Press {
-            if app.is_search {
-                match key.code {
-                    KeyCode::Enter | KeyCode::Esc => { app.is_search = false; app.refresh_chan_cache(); }
-                    KeyCode::Char(c) => { app.search.push(c); let q = app.search.to_lowercase(); app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| c.name.to_lowercase().contains(&q)).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); app.refresh_chan_cache(); }
-                    KeyCode::Backspace => { app.search.pop(); let q = app.search.to_lowercase(); app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| c.name.to_lowercase().contains(&q)).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); app.refresh_chan_cache(); }
-                    _ => {}
-                }
-                continue;
-            }
             match app.screen {
+                Screen::Updating => {}
                 Screen::MainMenu => match key.code {
                     KeyCode::Up => { let i = app.m_state.selected().unwrap_or(0); app.m_state.select(Some(if i == 0 { 7 } else { i - 1 })); }
                     KeyCode::Down => { let i = app.m_state.selected().unwrap_or(0); app.m_state.select(Some(if i == 7 { 0 } else { i + 1 })); }
                     KeyCode::Enter => match app.m_state.selected().unwrap_or(0) {
                         0 => app.screen = Screen::CatList,
                         1 => { app.screen = Screen::Updating; terminal.draw(|f| ui(f, &mut app))?; let tracks = fetch_radio_now().await; for r in &mut app.data.radio { r.track = tracks.get(&r.id).cloned(); } app.r_state.select(Some(0)); app.screen = Screen::RadioList; }
-                        2 => { app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| app.config.favorites.contains(&c.url)).map(|(i, _)| i).collect(); app.title = " Favorites ".into(); app.ch_state.select(Some(0)); app.refresh_chan_cache(); app.screen = Screen::ChanList; }
-                        3 => { app.filtered = app.config.history.iter().filter_map(|u| app.data.channels.iter().position(|c| &c.url == u)).collect(); app.title = " History ".into(); app.ch_state.select(Some(0)); app.refresh_chan_cache(); app.screen = Screen::ChanList; }
+                        2 => { app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| app.config.favorites.contains(&c.url)).map(|(i, _)| i).collect(); app.title = " Favorites ".into(); app.ch_state.select(Some(0)); app.screen = Screen::ChanList; }
+                        3 => { app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| app.config.history.contains(&c.url)).map(|(i, _)| i).collect(); app.title = " History ".into(); app.ch_state.select(Some(0)); app.screen = Screen::ChanList; }
                         4 => app.stop_all(),
                         5 => { app.screen = Screen::Updating; terminal.draw(|f| ui(f, &mut app))?; update_data(&app.config).await?; app = App::new(Config::load()); terminal.clear()?; }
                         6 => app.screen = Screen::Settings, 7 => app.quit = true, _ => {}
                     },
                     KeyCode::Esc => app.quit = true, _ => {}
-                }
+                },
                 Screen::CatList => match key.code {
                     KeyCode::Up => { let i = app.cat_state.selected().unwrap_or(0); let l = app.data.groups.len(); if l>0 { app.cat_state.select(Some(if i==0 {l-1} else {i-1})); } }
                     KeyCode::Down => { let i = app.cat_state.selected().unwrap_or(0); let l = app.data.groups.len(); if l>0 { app.cat_state.select(Some(if i==l-1 {0} else {i+1})); } }
-                    KeyCode::Enter => { if let Some(idx) = app.cat_state.selected() { let g = &app.data.groups[idx]; app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| &c.group == g).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); app.title = format!(" {} ", g); app.refresh_chan_cache(); app.screen = Screen::ChanList; } }
+                    KeyCode::Enter => { if let Some(idx) = app.cat_state.selected() { let g = &app.data.groups[idx]; app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| &c.group == g).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); app.title = format!(" {} ", g); app.screen = Screen::ChanList; } }
                     KeyCode::Esc => app.screen = Screen::MainMenu, _ => {}
                 }
                 Screen::ChanList => match key.code {
                     KeyCode::Up => { let i = app.ch_state.selected().unwrap_or(0); let l = app.filtered.len(); if l>0 { app.ch_state.select(Some(if i==0 {l-1} else {i-1})); } }
                     KeyCode::Down => { let i = app.ch_state.selected().unwrap_or(0); let l = app.filtered.len(); if l>0 { app.ch_state.select(Some(if i==l-1 {0} else {i+1})); } }
                     KeyCode::Char('/') => { app.is_search = true; app.search.clear(); }
-                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => { if let Some(i) = app.ch_state.selected() { let idx = app.filtered[i]; let u = app.data.channels[idx].url.clone(); if app.config.favorites.contains(&u) { app.config.favorites.remove(&u); } else { app.config.favorites.insert(u); } let _ = app.config.save(); app.refresh_chan_cache(); } }
-                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => { app.search.push(c); let q = app.search.to_lowercase(); app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| c.name.to_lowercase().contains(&q)).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); app.refresh_chan_cache(); }
-                    KeyCode::Backspace => { app.search.pop(); let q = app.search.to_lowercase(); app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| c.name.to_lowercase().contains(&q)).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); app.refresh_chan_cache(); }
+                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => { if let Some(i) = app.ch_state.selected() { let idx = app.filtered[i]; let u = app.data.channels[idx].url.clone(); if app.config.favorites.contains(&u) { app.config.favorites.remove(&u); } else { app.config.favorites.insert(u); } let _ = app.config.save(); } }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => { app.search.push(c); let q = app.search.to_lowercase(); app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| c.norm_name.to_lowercase().contains(&q) || c.name.to_lowercase().contains(&q)).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); }
+                    KeyCode::Backspace => { app.search.pop(); let q = app.search.to_lowercase(); app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| c.norm_name.to_lowercase().contains(&q) || c.name.to_lowercase().contains(&q)).map(|(i, _)| i).collect(); app.ch_state.select(Some(0)); }
                     KeyCode::Enter => if !app.filtered.is_empty() { app.screen = Screen::Detail; }
-                    KeyCode::Esc => { if app.search.is_empty() { app.screen = Screen::CatList; } else { app.search.clear(); app.refresh_chan_cache(); } }
+                    KeyCode::Esc => { if app.search.is_empty() { app.screen = Screen::CatList; } else { app.search.clear(); } }
                     _ => {}
                 }
                 Screen::RadioList => match key.code {
@@ -330,7 +337,7 @@ async fn main() -> Result<()> {
                     KeyCode::Esc => app.screen = Screen::MainMenu, _ => {}
                 }
                 Screen::Detail => match key.code {
-                    KeyCode::Enter => { if let Some(i) = app.ch_state.selected() { let idx = app.filtered[i]; let ch = &app.data.channels[idx]; let (u, n) = (ch.url.clone(), ch.name.clone()); let st = app.get_epg(ch).map(|p| p.title.clone()).unwrap_or_default(); app.run_mpv(&u, &n, &st, false); app.config.history.retain(|x| x != &u); app.config.history.insert(0, u); app.config.history.truncate(10); let _ = app.config.save(); } }
+                    KeyCode::Enter => { if let Some(i) = app.ch_state.selected() { let (u, n) = { let ch = &app.data.channels[app.filtered[i]]; (ch.url.clone(), ch.name.clone()) }; app.run_mpv(&u, &n, "", false); app.config.history.retain(|x| x != &u); app.config.history.insert(0, u); app.config.history.truncate(10); let _ = app.config.save(); } }
                     KeyCode::Esc => app.screen = Screen::ChanList, _ => {}
                 }
                 Screen::Settings => match key.code {
@@ -347,7 +354,6 @@ async fn main() -> Result<()> {
                     KeyCode::Backspace => { app.in_buf.pop(); }
                     _ => {}
                 }
-                _ => {}
             }
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) { app.quit = true; }
         }
