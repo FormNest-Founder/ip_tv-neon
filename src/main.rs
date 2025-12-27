@@ -45,7 +45,7 @@ struct Channel {
     icon: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Config {
     playlist_url: String,
     epg_url: String,
@@ -300,22 +300,29 @@ async fn run_interactive() -> Result<()> {
                 term.clear_screen()?;
                 let now = Utc::now().timestamp();
                 let mut names = Vec::new();
+                let mut channel_now_progs = Vec::new();
+
                 for c in &filtered {
                     let mut epg_str = " | No EPG".to_string();
+                    let mut now_prog = None;
                     if let Some(id) = name_to_id.get(&normalize_name(&c.name)) {
                         if let Some(info) = cat_epg.get(id) {
                             let left = (info.now_stop - now) / 60;
                             epg_str = format!(" | {} ({}m left) | NEXT: {}", info.now_title, left, info.next_title);
+                            now_prog = Some(info.now_title.clone());
                         }
                     }
+                    channel_now_progs.push(now_prog);
                     let name = if c.name.chars().count() > 25 { c.name.chars().take(22).collect::<String>() + "..." } else { c.name.clone() };
                     names.push(format!("{} {:<25}{}", if is_radio { "📻" } else { "📺" }, name, epg_str));
                 }
                 names.push("🔙 BACK".into());
+
                 let chan_sel = FuzzySelect::new().with_prompt(format!("{} Channels", group)).items(&names).default(0).interact_opt()?;
                 match chan_sel {
                     Some(idx) if idx < filtered.len() => {
-                        run_mpv(filtered[idx], is_radio);
+                        let epg_now = channel_now_progs[idx].clone();
+                        run_mpv(filtered[idx], is_radio, epg_now);
                         if !is_radio { let _ = term.clear_screen(); std::process::exit(0); }
                     },
                     _ => break 'channel_loop,
@@ -326,12 +333,28 @@ async fn run_interactive() -> Result<()> {
     Ok(())
 }
 
-fn run_mpv(chan: &Channel, is_radio: bool) {
+fn run_mpv(chan: &Channel, is_radio: bool, epg_now: Option<String>) {
     let _ = Command::new("pkill").args(["-9", "-f", "mpv"]).status();
     let mut cmd = Command::new("mpv");
-    cmd.arg(format!("--user-agent={}", UA)).arg(format!("--title={}", chan.name)).arg("--no-resume-playback").arg("--cache=yes");
-    if is_radio { cmd.arg("--no-video").arg("--volume=80").arg("--no-terminal"); }
-    else { cmd.arg("--ontop").arg("--fs").arg("--no-terminal"); }
+    
+    let title = if let Some(prog) = epg_now {
+        format!("{} | {}", chan.name, prog)
+    } else {
+        chan.name.clone()
+    };
+
+    cmd.arg(format!("--user-agent={}", UA))
+       .arg(format!("--title={}", title))
+       .arg(format!("--force-media-title={}", title))
+       .arg("--no-resume-playback")
+       .arg("--cache=yes");
+
+    if is_radio {
+        cmd.arg("--no-video").arg("--volume=80").arg("--no-terminal");
+    } else {
+        cmd.arg("--ontop").arg("--fs").arg("--no-terminal");
+    }
+    
     cmd.arg(&chan.url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).stdin(std::process::Stdio::null());
     unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
     let _ = cmd.spawn();
