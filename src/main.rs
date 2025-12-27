@@ -77,16 +77,18 @@ fn normalize_name(name: &str) -> String {
 }
 
 fn parse_epg_time(time_str: &str) -> i64 {
-    // Формат XMLTV обычно: YYYYMMDDHHMMSS +HHMM
-    // Пример: 20251227080000 +0300
     if time_str.len() < 14 { return 0; }
     
-    // Пытаемся распарсить с учетом смещения часового пояса
+    // С пробелом: "20251227082900 +0300"
     if let Ok(dt) = chrono::DateTime::parse_from_str(time_str, "%Y%m%d%H%M%S %z") {
         return dt.timestamp();
     }
     
-    // Резервный вариант, если смещения нет
+    // Без пробела: "20251227082900+0300"
+    if let Ok(dt) = chrono::DateTime::parse_from_str(time_str, "%Y%m%d%H%M%S%z") {
+        return dt.timestamp();
+    }
+    
     if let Ok(naive) = NaiveDateTime::parse_from_str(&time_str[0..14], "%Y%m%d%H%M%S") {
         return naive.and_utc().timestamp();
     }
@@ -100,19 +102,33 @@ fn parse_epg(path: &Path) -> std::collections::HashMap<String, String> {
     let mut reader = Reader::from_reader(std::io::BufReader::new(file.unwrap()));
     reader.config_mut().trim_text(true);
     let now = Utc::now().timestamp();
-    let mut channel_id_to_name = std::collections::HashMap::new();
+    
+    // Карта: ID канала -> Список его нормализованных имен
+    let mut id_to_names: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     let mut buf = Vec::new();
     let (mut cur_id, mut in_disp, mut in_prog, mut prog_id, mut skip) = (String::new(), false, false, String::new(), false);
+
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"channel" => cur_id = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"id").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default(),
+                b"channel" => {
+                    cur_id = e.attributes().filter_map(|a| a.ok())
+                        .find(|a| a.key.as_ref() == b"id")
+                        .map(|a| String::from_utf8_lossy(&a.value).into_owned())
+                        .unwrap_or_default();
+                },
                 b"display-name" => in_disp = true,
                 b"programme" => {
                     let s = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"start").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
                     let t = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"stop").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
-                    if parse_epg_time(&s) <= now && now <= parse_epg_time(&t) {
-                        prog_id = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"channel").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
+                    let start_t = parse_epg_time(&s);
+                    let stop_t = parse_epg_time(&t);
+                    
+                    if start_t <= now && now <= stop_t {
+                        prog_id = e.attributes().filter_map(|a| a.ok())
+                            .find(|a| a.key.as_ref() == b"channel")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned())
+                            .unwrap_or_default();
                         skip = false;
                     } else { skip = true; }
                 },
@@ -120,12 +136,23 @@ fn parse_epg(path: &Path) -> std::collections::HashMap<String, String> {
                 _ => (),
             },
             Ok(Event::Text(e)) => {
-                let text = String::from_utf8_lossy(e.as_ref()).into_owned();
-                if in_disp && !cur_id.is_empty() { channel_id_to_name.insert(cur_id.clone(), normalize_name(&text)); }
-                else if in_prog { if let Some(n) = channel_id_to_name.get(&prog_id) { epg_map.insert(n.clone(), text); } }
+                let text = String::from_utf8_lossy(e.as_ref()).trim().to_string();
+                if text.is_empty() { buf.clear(); continue; }
+                
+                if in_disp && !cur_id.is_empty() {
+                    id_to_names.entry(cur_id.clone()).or_default().push(normalize_name(&text));
+                } else if in_prog {
+                    if let Some(names) = id_to_names.get(&prog_id) {
+                        for name in names {
+                            epg_map.insert(name.clone(), text.clone());
+                        }
+                    }
+                }
             },
             Ok(Event::End(e)) => match e.name().as_ref() {
-                b"display-name" => in_disp = false, b"title" => in_prog = false, b"channel" => cur_id.clear(),
+                b"display-name" => in_disp = false,
+                b"title" => in_prog = false,
+                b"channel" => cur_id.clear(),
                 b"programme" => { prog_id.clear(); skip = false; }
                 _ => (),
             },
