@@ -7,7 +7,7 @@ use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use flate2::read::GzDecoder;
-use chrono::{Local, Utc, NaiveDateTime};
+use chrono::{Utc, NaiveDateTime};
 use clap::{Parser, Subcommand};
 use regex::Regex;
 use reqwest::header::USER_AGENT;
@@ -35,7 +35,6 @@ struct EpgInfo {
     now_title: String,
     now_stop: i64,
     next_title: String,
-    next_start: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -122,7 +121,7 @@ fn parse_epg_time(time_str: &str) -> i64 {
 fn build_name_to_id_map(path: &Path) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     if let Ok(file) = fs::File::open(path) {
-        let mut reader = Reader::from_reader(BufReader::new(file));
+        let mut reader = Reader::from_reader(BufReader::with_capacity(65536, file));
         let mut buf = Vec::new();
         let mut cur_id = String::new();
         let mut in_disp = false;
@@ -148,7 +147,7 @@ fn build_name_to_id_map(path: &Path) -> std::collections::HashMap<String, String
 fn get_category_epg(path: &Path, target_ids: &std::collections::HashSet<String>) -> std::collections::HashMap<String, EpgInfo> {
     let mut results = std::collections::HashMap::new();
     if let Ok(file) = fs::File::open(path) {
-        let mut reader = Reader::from_reader(BufReader::new(file));
+        let mut reader = Reader::from_reader(BufReader::with_capacity(65536, file));
         let mut buf = Vec::new();
         let now = Utc::now().timestamp();
         struct TempProg { now: Option<(String, i64)>, next: Option<(String, i64)> }
@@ -189,7 +188,6 @@ fn get_category_epg(path: &Path, target_ids: &std::collections::HashSet<String>)
                 now_title: tp.now.as_ref().map(|x| x.0.clone()).unwrap_or_else(|| "...".into()),
                 now_stop: tp.now.map(|x| x.1).unwrap_or(0),
                 next_title: tp.next.as_ref().map(|x| x.0.clone()).unwrap_or_else(|| "...".into()),
-                next_start: tp.next.map(|x| x.1).unwrap_or(0),
             });
         }
     }
@@ -197,7 +195,7 @@ fn get_category_epg(path: &Path, target_ids: &std::collections::HashSet<String>)
 }
 
 async fn update_data(conf: &Config) -> Result<()> {
-    let (epg_p, json_p, radio_p, icons_d) = get_cache_paths();
+    let (epg_p, json_p, radio_p, _icons_d) = get_cache_paths();
     println!("📡 {} EPG...", style("Downloading").cyan());
     download_file(&conf.epg_url, &epg_p, true).await?;
     let client = reqwest::Client::builder().user_agent("Mozilla/5.0").build()?;
@@ -210,7 +208,7 @@ async fn update_data(conf: &Config) -> Result<()> {
             tvg = re_tvg.captures(line).map(|c| c.get(1).unwrap().as_str().to_string()).unwrap_or_default();
             logo = re_logo.captures(line).map(|c| c.get(1).unwrap().as_str().to_string()).unwrap_or_default();
             if let Some(pos) = line.rfind(',') { name = line[pos+1..].trim().to_string(); if tvg.is_empty() { tvg = name.clone(); } }
-        } else if line.starts_with("#EXTGRP:") { grp = line[8..].trim().to_string(); }
+        } else if let Some(stripped) = line.strip_prefix("#EXTGRP:") { grp = stripped.trim().to_string(); }
         else if line.starts_with("http") {
             if grp.is_empty() { grp = "Other".to_string(); }
             groups.insert(grp.clone());
@@ -224,15 +222,9 @@ async fn update_data(conf: &Config) -> Result<()> {
     if let Some(stations) = rad["result"]["stations"].as_array() {
         for st in stations {
             let (n, u, i_u) = (st["title"].as_str().unwrap_or_default(), st["stream_320"].as_str().unwrap_or_default(), st["icon_fill_colored"].as_str().unwrap_or_default());
-            let i_p = icons_d.join(format!("{}.png", n.replace("/", "_")));
-            if !i_p.exists() && !i_u.is_empty() { let _ = download_file(i_u, &i_p, false).await; }
-            if let Some(gs) = st["genre"].as_array() {
-                for g in gs {
-                    let gn = g["name"].as_str().unwrap_or_default().to_string();
-                    r_genres.insert(gn.clone());
-                    r_stations.push(Channel { name: n.to_string(), group: gn, url: u.to_string(), icon: Some(i_p.to_string_lossy().to_string()) });
-                }
-            }
+            let grp = if let Some(g) = st["genre"].as_array().and_then(|a| a.first()).and_then(|v| v["name"].as_str()) { g.to_string() } else { "Other".to_string() };
+            r_genres.insert(grp.clone());
+            r_stations.push(Channel { name: n.to_string(), group: grp, url: u.to_string(), icon: Some(i_u.to_string()) });
         }
     }
     fs::write(radio_p, serde_json::to_string(&CacheData { groups: sorted_vec(r_genres), channels: r_stations })?)?;
@@ -253,7 +245,6 @@ async fn run_interactive() -> Result<()> {
         println!("{}", style(" NIGHT CITY NEON HUB ").on_magenta().black().bold());
         let sources = vec!["📺 IPTV", "📻 RADIO", "📂 LOCAL", "🔄 UPDATE", "⏹️ STOP ALL", "⚙️ SETTINGS", "🚪 EXIT"];
         let source_sel = Select::with_theme(&theme).with_prompt("Source").items(&sources).default(0).interact_opt()?;
-        
         match source_sel {
             Some(6) | None => break 'source_loop,
             Some(5) => {
@@ -304,18 +295,18 @@ async fn run_interactive() -> Result<()> {
                 let now = Utc::now().timestamp();
                 let mut names = Vec::new();
                 for c in &filtered {
-                    let mut epg_str = String::new();
+                    let mut epg_str = " | No EPG".to_string();
                     if let Some(id) = name_to_id.get(&normalize_name(&c.name)) {
                         if let Some(info) = cat_epg.get(id) {
                             let left = (info.now_stop - now) / 60;
-                            let next_t = if info.next_start > 0 { chrono::DateTime::from_timestamp(info.next_start, 0).unwrap_or_default().with_timezone(&Local).format("%H:%M").to_string() } else { "--:--".into() };
-                            epg_str = format!(" | {} ({}m left) | NEXT: {} {}", style(&info.now_title).yellow(), style(left).red(), style(next_t).cyan(), style(&info.next_title).dim());
+                            epg_str = format!(" | {} ({}m left) | NEXT: {}", info.now_title, left, info.next_title);
                         }
                     }
-                    names.push(format!("{} {}{}", if is_radio { "📻" } else { "📺" }, style(&c.name).bold(), epg_str));
+                    let name = if c.name.chars().count() > 25 { c.name.chars().take(22).collect::<String>() + "..." } else { c.name.clone() };
+                    names.push(format!("{} {:<25}{}", if is_radio { "📻" } else { "📺" }, name, epg_str));
                 }
                 names.push("🔙 BACK".into());
-                let chan_sel = FuzzySelect::with_theme(&theme).with_prompt(format!("{} Channels", group)).items(&names).default(0).interact_opt()?;
+                let chan_sel = FuzzySelect::new().with_prompt(format!("{} Channels", group)).items(&names).default(0).interact_opt()?;
                 match chan_sel {
                     Some(idx) if idx < filtered.len() => {
                         run_mpv(filtered[idx], is_radio);
