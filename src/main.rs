@@ -45,10 +45,11 @@ struct Channel {
     icon: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Config {
     playlist_url: String,
     epg_url: String,
+    torrserver_url: String,
 }
 
 impl Config {
@@ -71,6 +72,7 @@ impl Default for Config {
         Config {
             playlist_url: "http://331273bff393.goodstreem.org/playlists/uplist/bc17084cb401b17401e1001e4c4cb80a/playlist.m3u8".into(),
             epg_url: "http://epg.it999.ru/edem.xml.gz".into(),
+            torrserver_url: "http://localhost:8090".into(),
         }
     }
 }
@@ -251,16 +253,20 @@ async fn run_interactive() -> Result<()> {
                 loop {
                     term.clear_screen()?;
                     println!("{} {}", style(" ⚙️ SETTINGS ").on_yellow().black().bold(), style("(Esc to go back)").dim());
-                    let options = vec!["🔗 Edit Playlist URL", "📅 Edit EPG URL", "🔙 BACK"];
+                    let options = vec!["🔗 Edit Playlist URL", "📅 Edit EPG URL", "🚀 TorrServer URL", "🔙 BACK"];
                     let sel = Select::with_theme(&theme).items(&options).default(0).interact_opt()?;
                     match sel {
                         Some(0) => {
-                            let url: String = dialoguer::Input::with_theme(&theme).with_prompt("New Playlist URL").with_initial_text(&config.playlist_url).interact_text()?;
+                            let url: String = dialoguer::Input::with_theme(&theme).with_prompt("Playlist URL").with_initial_text(&config.playlist_url).interact_text()?;
                             config.playlist_url = url; config.save();
                         },
                         Some(1) => {
-                            let url: String = dialoguer::Input::with_theme(&theme).with_prompt("New EPG URL").with_initial_text(&config.epg_url).interact_text()?;
+                            let url: String = dialoguer::Input::with_theme(&theme).with_prompt("EPG URL").with_initial_text(&config.epg_url).interact_text()?;
                             config.epg_url = url; config.save();
+                        },
+                        Some(2) => {
+                            let url: String = dialoguer::Input::with_theme(&theme).with_prompt("TorrServer URL").with_initial_text(&config.torrserver_url).interact_text()?;
+                            config.torrserver_url = url; config.save();
                         },
                         _ => break,
                     }
