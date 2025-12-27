@@ -171,19 +171,21 @@ async fn update_data() -> Result<()> {
     let epg = parse_epg(&epg_p);
     let client = reqwest::Client::builder().user_agent("Mozilla/5.0").build()?;
     let m3u = client.get(PLAYLIST_URL).send().await?.text().await?;
-    let (mut chans, mut groups, mut name, mut tvg, mut grp) = (Vec::new(), std::collections::HashSet::new(), String::new(), String::new(), String::new());
+    let (mut chans, mut groups, mut name, mut tvg, mut grp, mut logo) = (Vec::new(), std::collections::HashSet::new(), String::new(), String::new(), String::new(), String::new());
     let re_tvg = Regex::new(r#"tvg-name="([^"]+)""#).unwrap();
+    let re_logo = Regex::new(r#"tvg-logo="([^"]+)""#).unwrap();
     for line in m3u.lines() {
         if line.starts_with("#EXTINF:") {
             tvg = re_tvg.captures(line).map(|c| c.get(1).unwrap().as_str().to_string()).unwrap_or_default();
+            logo = re_logo.captures(line).map(|c| c.get(1).unwrap().as_str().to_string()).unwrap_or_default();
             if let Some(pos) = line.rfind(',') { name = line[pos+1..].trim().to_string(); if tvg.is_empty() { tvg = name.clone(); } }
         } else if line.starts_with("#EXTGRP:") { grp = line[8..].trim().to_string(); }
         else if line.starts_with("http") {
             if grp.is_empty() { grp = "Other".to_string(); }
             groups.insert(grp.clone());
             let prog = epg.get(&normalize_name(&tvg)).or_else(|| epg.get(&normalize_name(&name))).cloned();
-            chans.push(Channel { name: name.clone(), group: grp.clone(), url: line.trim().to_string(), epg_now: prog, icon: None });
-            tvg.clear(); grp.clear();
+            chans.push(Channel { name: name.clone(), group: grp.clone(), url: line.trim().to_string(), epg_now: prog, icon: Some(logo.clone()) });
+            tvg.clear(); grp.clear(); logo.clear();
         }
     }
     fs::write(json_p, serde_json::to_string(&CacheData { groups: sorted_vec(groups), channels: chans })?)?;
@@ -259,12 +261,43 @@ async fn run_interactive() -> Result<()> {
             let group = &groups[group_idx];
             if group == "🔙 BACK TO SOURCES" { break 'category_loop; }
 
-            'channel_loop: loop {
-                let filtered: Vec<&Channel> = data.channels.iter().filter(|c| group == "🌐 ALL" || &c.group == group).collect();
-                let mut names: Vec<String> = filtered.iter().map(|c| format!("{} | {}", style(&c.name).cyan(), c.epg_now.as_deref().unwrap_or("..."))).collect();
-                names.push("🔙 BACK TO CATEGORIES".to_string());
-                
-                let chan_selection = FuzzySelect::with_theme(&theme).with_prompt(format!("{} > Channel (Esc for Back)", group)).items(&names).default(0).interact_opt()?;
+                        'channel_loop: loop {
+
+                            let filtered: Vec<&Channel> = data.channels.iter().filter(|c| group == "🌐 ALL" || &c.group == group).collect();
+
+                            let mut names: Vec<String> = filtered.iter().map(|c| {
+
+                                let icon = if is_radio { 
+
+                                    style("󰙺").magenta() 
+
+                                } else if is_local { 
+
+                                    style("󰉋").yellow() 
+
+                                } else { 
+
+                                    style("󰵗").cyan() 
+
+                                };
+
+                                format!("{} {} | {}", icon, style(&c.name).bold(), style(c.epg_now.as_deref().unwrap_or("...")).dim())
+
+                            }).collect();
+
+                            names.push(format!("{} 🔙 BACK TO CATEGORIES", style("󰌍").red()));
+
+                            
+
+                            let chan_selection = FuzzySelect::with_theme(&theme)
+
+                                .with_prompt(format!("{} > Channel (Esc for Back)", group))
+
+                                .items(&names)
+
+                                .default(0)
+
+                                .interact_opt()?;
                 let chan_idx = match chan_selection { Some(idx) => idx, None => break 'channel_loop };
                 if chan_idx == filtered.len() { break 'channel_loop; }
                 
@@ -276,6 +309,16 @@ async fn run_interactive() -> Result<()> {
                    .arg(format!("--title={}", chan.name))
                    .arg("--no-terminal").arg("--ontop").arg("--fs")
                    .arg("--no-resume-playback").arg("--cache=yes");
+                
+                // Если есть иконка, передаем её в mpv
+                if let Some(ref logo) = chan.icon {
+                    if !logo.is_empty() {
+                        // Для радио устанавливаем фон, для ТВ просто метаданные
+                        if is_radio {
+                            cmd.arg(format!("--external-file={}", logo)).arg("--force-window");
+                        }
+                    }
+                }
                 
                 if is_radio { cmd.arg("--no-video").arg("--volume=80"); }
                 cmd.arg(&chan.url);
