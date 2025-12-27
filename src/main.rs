@@ -15,8 +15,6 @@ use dialoguer::{theme::ColorfulTheme, FuzzySelect, Select};
 use console::{style, Term};
 use std::os::unix::process::CommandExt;
 
-const PLAYLIST_URL: &str = "http://331273bff393.goodstreem.org/playlists/uplist/bc17084cb401b17401e1001e4c4cb80a/playlist.m3u8";
-const EPG_URL: &str = "http://epg.it999.ru/edem.xml.gz";
 const RADIO_API: &str = "https://www.radiorecord.ru/api/stations";
 const CACHE_DIR: &str = "/tmp/neon_iptv_rs";
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -46,6 +44,36 @@ struct Channel {
     group: String,
     url: String,
     icon: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Config {
+    playlist_url: String,
+    epg_url: String,
+}
+
+impl Config {
+    fn load() -> Self {
+        let path = dirs::config_dir().unwrap().join("neon-iptv/config.json");
+        if let Ok(data) = fs::read_to_string(&path) {
+            if let Ok(conf) = serde_json::from_str(&data) { return conf; }
+        }
+        Self::default()
+    }
+    fn save(&self) {
+        let dir = dirs::config_dir().unwrap().join("neon-iptv");
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(dir.join("config.json"), serde_json::to_string(self).unwrap());
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            playlist_url: "http://331273bff393.goodstreem.org/playlists/uplist/bc17084cb401b17401e1001e4c4cb80a/playlist.m3u8".into(),
+            epg_url: "http://epg.it999.ru/edem.xml.gz".into(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -123,10 +151,8 @@ fn get_category_epg(path: &Path, target_ids: &std::collections::HashSet<String>)
         let mut reader = Reader::from_reader(BufReader::new(file));
         let mut buf = Vec::new();
         let now = Utc::now().timestamp();
-        
         struct TempProg { now: Option<(String, i64)>, next: Option<(String, i64)> }
         let mut temp_map: std::collections::HashMap<String, TempProg> = std::collections::HashMap::new();
-
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) if e.name().as_ref() == b"programme" => {
@@ -136,7 +162,6 @@ fn get_category_epg(path: &Path, target_ids: &std::collections::HashSet<String>)
                         let t_str = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"stop").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
                         let start = parse_epg_time(&s_str);
                         let stop = parse_epg_time(&t_str);
-                        
                         let mut title = String::new();
                         let mut title_buf = Vec::new();
                         loop {
@@ -149,13 +174,9 @@ fn get_category_epg(path: &Path, target_ids: &std::collections::HashSet<String>)
                             }
                             title_buf.clear();
                         }
-
                         let entry = temp_map.entry(id).or_insert(TempProg { now: None, next: None });
-                        if start <= now && now < stop {
-                            entry.now = Some((title, stop));
-                        } else if start >= now && (entry.next.is_none() || start < entry.next.as_ref().unwrap().1) {
-                            entry.next = Some((title, start));
-                        }
+                        if start <= now && now < stop { entry.now = Some((title, stop)); }
+                        else if start >= now && (entry.next.is_none() || start < entry.next.as_ref().unwrap().1) { entry.next = Some((title, start)); }
                     }
                 },
                 Ok(Event::Eof) => break,
@@ -175,12 +196,12 @@ fn get_category_epg(path: &Path, target_ids: &std::collections::HashSet<String>)
     results
 }
 
-async fn update_data() -> Result<()> {
+async fn update_data(conf: &Config) -> Result<()> {
     let (epg_p, json_p, radio_p, icons_d) = get_cache_paths();
     println!("📡 {} EPG...", style("Downloading").cyan());
-    download_file(EPG_URL, &epg_p, true).await?;
+    download_file(&conf.epg_url, &epg_p, true).await?;
     let client = reqwest::Client::builder().user_agent("Mozilla/5.0").build()?;
-    let m3u = client.get(PLAYLIST_URL).send().await?.text().await?;
+    let m3u = client.get(&conf.playlist_url).send().await?.text().await?;
     let (mut chans, mut groups, mut name, mut tvg, mut grp, mut logo) = (Vec::new(), std::collections::HashSet::new(), String::new(), String::new(), String::new(), String::new());
     let re_tvg = Regex::new(r#"tvg-name="([^"]+)""#).unwrap();
     let re_logo = Regex::new(r#"tvg-logo="([^"]+)""#).unwrap();
@@ -225,15 +246,42 @@ async fn run_interactive() -> Result<()> {
     let term = Term::stdout();
     let theme = ColorfulTheme::default();
     let (epg_p, json_p, radio_p, _) = get_cache_paths();
+    let mut config = Config::load();
 
     'source_loop: loop {
         term.clear_screen()?;
         println!("{}", style(" NIGHT CITY NEON HUB ").on_magenta().black().bold());
-        let sources = vec!["📺 IPTV", "📻 RADIO", "📂 LOCAL", "🔄 UPDATE", "🚪 EXIT"];
+        let sources = vec!["📺 IPTV", "📻 RADIO", "📂 LOCAL", "🔄 UPDATE", "⏹️ STOP ALL", "⚙️ SETTINGS", "🚪 EXIT"];
         let source_sel = Select::with_theme(&theme).with_prompt("Source").items(&sources).default(0).interact_opt()?;
-        let source_idx = match source_sel { Some(4) | None => break 'source_loop, Some(idx) => idx };
-        if source_idx == 3 { update_data().await?; continue; }
+        
+        match source_sel {
+            Some(6) | None => break 'source_loop,
+            Some(5) => {
+                loop {
+                    term.clear_screen()?;
+                    println!("{} {}", style(" ⚙️ SETTINGS ").on_yellow().black().bold(), style("(Esc to go back)").dim());
+                    let options = vec!["🔗 Edit Playlist URL", "📅 Edit EPG URL", "🔙 BACK"];
+                    let sel = Select::with_theme(&theme).items(&options).default(0).interact_opt()?;
+                    match sel {
+                        Some(0) => {
+                            let url: String = dialoguer::Input::with_theme(&theme).with_prompt("New Playlist URL").with_initial_text(&config.playlist_url).interact_text()?;
+                            config.playlist_url = url; config.save();
+                        },
+                        Some(1) => {
+                            let url: String = dialoguer::Input::with_theme(&theme).with_prompt("New EPG URL").with_initial_text(&config.epg_url).interact_text()?;
+                            config.epg_url = url; config.save();
+                        },
+                        _ => break,
+                    }
+                }
+                continue;
+            },
+            Some(4) => { let _ = Command::new("pkill").args(["-9", "-f", "mpv"]).status(); continue; },
+            Some(3) => { update_data(&config).await?; continue; },
+            _ => (),
+        }
 
+        let source_idx = source_sel.unwrap();
         let is_radio = source_idx == 1;
         let data: CacheData = serde_json::from_str(&fs::read_to_string(if is_radio { &radio_p } else { &json_p })?)?;
         let name_to_id = if !is_radio { build_name_to_id_map(&epg_p) } else { std::collections::HashMap::new() };
@@ -260,9 +308,7 @@ async fn run_interactive() -> Result<()> {
                     if let Some(id) = name_to_id.get(&normalize_name(&c.name)) {
                         if let Some(info) = cat_epg.get(id) {
                             let left = (info.now_stop - now) / 60;
-                            let next_t = if info.next_start > 0 { 
-                                chrono::DateTime::from_timestamp(info.next_start, 0).unwrap_or_default().with_timezone(&Local).format("%H:%M").to_string() 
-                            } else { "--:--".into() };
+                            let next_t = if info.next_start > 0 { chrono::DateTime::from_timestamp(info.next_start, 0).unwrap_or_default().with_timezone(&Local).format("%H:%M").to_string() } else { "--:--".into() };
                             epg_str = format!(" | {} ({}m left) | NEXT: {} {}", style(&info.now_title).yellow(), style(left).red(), style(next_t).cyan(), style(&info.next_title).dim());
                         }
                     }
@@ -271,7 +317,10 @@ async fn run_interactive() -> Result<()> {
                 names.push("🔙 BACK".into());
                 let chan_sel = FuzzySelect::with_theme(&theme).with_prompt(format!("{} Channels", group)).items(&names).default(0).interact_opt()?;
                 match chan_sel {
-                    Some(idx) if idx < filtered.len() => run_mpv(filtered[idx], is_radio),
+                    Some(idx) if idx < filtered.len() => {
+                        run_mpv(filtered[idx], is_radio);
+                        if !is_radio { let _ = term.clear_screen(); std::process::exit(0); }
+                    },
                     _ => break 'channel_loop,
                 }
             }
@@ -288,14 +337,15 @@ fn run_mpv(chan: &Channel, is_radio: bool) {
     else { cmd.arg("--ontop").arg("--fs").arg("--no-terminal"); }
     cmd.arg(&chan.url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).stdin(std::process::Stdio::null());
     unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
-    if let Ok(_) = cmd.spawn() { std::process::exit(0); }
+    let _ = cmd.spawn();
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config = Config::load();
     match cli.command {
-        Some(Commands::Update) => update_data().await?,
+        Some(Commands::Update) => update_data(&config).await?,
         _ => run_interactive().await?,
     }
     Ok(())
