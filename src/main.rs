@@ -1,59 +1,63 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::io::Read;
+use std::process::Command;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use flate2::read::GzDecoder;
 use chrono::{Local, NaiveDateTime};
-use clap::{Parser, Subcommand, Args};
+use clap::{Parser, Subcommand};
 use regex::Regex;
+use reqwest::header::{USER_AGENT, REFERER, ACCEPT};
+use dialoguer::{theme::ColorfulTheme, FuzzySelect, Select};
+use console::{style, Term};
+use std::os::unix::process::CommandExt;
 
 const PLAYLIST_URL: &str = "http://331273bff393.goodstreem.org/playlists/uplist/bc17084cb401b17401e1001e4c4cb80a/playlist.m3u8";
 const EPG_URL: &str = "http://epg.it999.ru/edem.xml.gz";
+const RADIO_API: &str = "https://www.radiorecord.ru/api/stations";
 const CACHE_DIR: &str = "/tmp/neon_iptv_rs";
+const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    Groups,
-    Channels { group: String },
-    Play(PlayArgs),
     Update,
 }
 
-#[derive(Args)]
-struct PlayArgs {
-    #[arg(long)]
-    url: String,
-    #[arg(long)]
-    title: String,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Channel {
     name: String,
-    tvg_name: String,
     group: String,
     url: String,
     epg_now: Option<String>,
+    icon: Option<String>,
 }
 
-fn get_cache_paths() -> (PathBuf, PathBuf) {
+#[derive(Serialize, Deserialize)]
+struct CacheData {
+    groups: Vec<String>,
+    channels: Vec<Channel>,
+}
+
+fn get_cache_paths() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let dir = Path::new(CACHE_DIR);
+    let icons = dir.join("icons");
     if !dir.exists() { fs::create_dir_all(dir).ok(); }
-    (dir.join("epg.xml"), dir.join("data.json"))
+    if !icons.exists() { fs::create_dir_all(&icons).ok(); }
+    (dir.join("epg.xml"), dir.join("data.json"), dir.join("radio.json"), icons)
 }
 
 async fn download_file(url: &str, path: &Path, is_gz: bool) -> Result<()> {
-    let resp = reqwest::get(url).await?.bytes().await?;
+    let client = reqwest::Client::builder().build()?;
+    let resp = client.get(url).header(USER_AGENT, "Mozilla/5.0").send().await?.bytes().await?;
     if is_gz {
         let mut decoder = GzDecoder::new(&resp[..]);
         let mut decoded = Vec::new();
@@ -74,14 +78,7 @@ fn normalize_name(name: &str) -> String {
 
 fn parse_epg_time(time_str: &str) -> i64 {
     if time_str.len() < 14 { return 0; }
-    let base = &time_str[0..14];
-    if let Ok(naive) = NaiveDateTime::parse_from_str(base, "%Y%m%d%H%M%S") {
-        if time_str.len() >= 20 {
-            let offset_part = &time_str[15..20];
-            if let Ok(hours) = offset_part[0..3].parse::<i64>() {
-                return naive.and_utc().timestamp() - hours * 3600;
-            }
-        }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(&time_str[0..14], "%Y%m%d%H%M%S") {
         return naive.and_utc().timestamp();
     }
     0
@@ -93,75 +90,36 @@ fn parse_epg(path: &Path) -> std::collections::HashMap<String, String> {
     if file.is_none() { return epg_map; }
     let mut reader = Reader::from_reader(std::io::BufReader::new(file.unwrap()));
     reader.config_mut().trim_text(true);
-    
     let now = Local::now().timestamp();
     let mut channel_id_to_name = std::collections::HashMap::new();
     let mut buf = Vec::new();
-    
-    let mut current_channel_id = String::new();
-    let mut in_display_name = false;
-    let mut in_programme_title = false;
-    let mut programme_channel_id = String::new();
-    let mut skip_programme = false;
-
+    let (mut cur_id, mut in_disp, mut in_prog, mut prog_id, mut skip) = (String::new(), false, false, String::new(), false);
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                match e.name().as_ref() {
-                    b"channel" => {
-                        current_channel_id = e.attributes().filter_map(|a| a.ok())
-                            .find(|a| a.key.as_ref() == b"id")
-                            .map(|a| String::from_utf8_lossy(&a.value).into_owned())
-                            .unwrap_or_default();
-                    }
-                    b"display-name" => in_display_name = true,
-                    b"programme" => {
-                        let start_str = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"start")
-                            .map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
-                        let stop_str = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"stop")
-                            .map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
-                        
-                        let start = parse_epg_time(&start_str);
-                        let stop = parse_epg_time(&stop_str);
-                        
-                        if start <= now && now <= stop {
-                            programme_channel_id = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"channel")
-                                .map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
-                            skip_programme = false;
-                        } else {
-                            skip_programme = true;
-                        }
-                    }
-                    b"title" => {
-                        if !skip_programme && !programme_channel_id.is_empty() {
-                            in_programme_title = true;
-                        }
-                    }
-                    _ => (),
-                }
-            }
+            Ok(Event::Start(e)) => match e.name().as_ref() {
+                b"channel" => cur_id = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"id").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default(),
+                b"display-name" => in_disp = true,
+                b"programme" => {
+                    let s = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"start").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
+                    let t = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"stop").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
+                    if parse_epg_time(&s) <= now && now <= parse_epg_time(&t) {
+                        prog_id = e.attributes().filter_map(|a| a.ok()).find(|a| a.key.as_ref() == b"channel").map(|a| String::from_utf8_lossy(&a.value).into_owned()).unwrap_or_default();
+                        skip = false;
+                    } else { skip = true; }
+                },
+                b"title" => if !skip && !prog_id.is_empty() { in_prog = true; },
+                _ => (),
+            },
             Ok(Event::Text(e)) => {
                 let text = String::from_utf8_lossy(e.as_ref()).into_owned();
-                if in_display_name && !current_channel_id.is_empty() {
-                    channel_id_to_name.insert(current_channel_id.clone(), normalize_name(&text));
-                } else if in_programme_title {
-                    if let Some(norm_name) = channel_id_to_name.get(&programme_channel_id) {
-                        epg_map.insert(norm_name.clone(), text);
-                    }
-                }
-            }
-            Ok(Event::End(e)) => {
-                match e.name().as_ref() {
-                    b"display-name" => in_display_name = false,
-                    b"title" => in_programme_title = false,
-                    b"channel" => current_channel_id.clear(),
-                    b"programme" => {
-                        programme_channel_id.clear();
-                        skip_programme = false;
-                    }
-                    _ => (),
-                }
-            }
+                if in_disp && !cur_id.is_empty() { channel_id_to_name.insert(cur_id.clone(), normalize_name(&text)); }
+                else if in_prog { if let Some(n) = channel_id_to_name.get(&prog_id) { epg_map.insert(n.clone(), text); } }
+            },
+            Ok(Event::End(e)) => match e.name().as_ref() {
+                b"display-name" => in_disp = false, b"title" => in_prog = false, b"channel" => cur_id.clear(),
+                b"programme" => { prog_id.clear(); skip = false; }
+                _ => (),
+            },
             Ok(Event::Eof) => break,
             _ => (),
         }
@@ -171,104 +129,146 @@ fn parse_epg(path: &Path) -> std::collections::HashMap<String, String> {
 }
 
 async fn update_data() -> Result<()> {
-    let (epg_path, json_path) = get_cache_paths();
-    println!("Updating EPG...");
-    download_file(EPG_URL, &epg_path, true).await?;
-    let epg_data = parse_epg(&epg_path);
-
-    println!("Updating Playlist...");
-    let m3u_resp = reqwest::get(PLAYLIST_URL).await?.text().await?;
-    let mut channels = Vec::new();
-    let mut groups = std::collections::HashSet::new();
-
-    let mut current_name = String::new();
-    let mut current_tvg_name = String::new();
-    let mut current_group = String::new();
-    
+    let (epg_p, json_p, radio_p, icons_d) = get_cache_paths();
+    println!("📡 {} EPG...", style("Downloading").cyan());
+    download_file(EPG_URL, &epg_p, true).await?;
+    let epg = parse_epg(&epg_p);
+    let client = reqwest::Client::builder().user_agent("Mozilla/5.0").build()?;
+    let m3u = client.get(PLAYLIST_URL).send().await?.text().await?;
+    let (mut chans, mut groups, mut name, mut tvg, mut grp) = (Vec::new(), std::collections::HashSet::new(), String::new(), String::new(), String::new());
     let re_tvg = Regex::new(r#"tvg-name="([^"]+)""#).unwrap();
-
-    for line in m3u_resp.lines() {
+    for line in m3u.lines() {
         if line.starts_with("#EXTINF:") {
-            if let Some(caps) = re_tvg.captures(line) {
-                current_tvg_name = caps.get(1).unwrap().as_str().to_string();
-            }
-            if let Some(pos) = line.rfind(',') {
-                current_name = line[pos+1..].trim().to_string();
-                if current_tvg_name.is_empty() { current_tvg_name = current_name.clone(); }
-            }
-        } else if line.starts_with("#EXTGRP:") {
-            current_group = line[8..].trim().to_string();
-        } else if line.starts_with("http") {
-            if current_group.is_empty() { current_group = "Other".to_string(); }
-            groups.insert(current_group.clone());
-            
-            let norm_tvg = normalize_name(&current_tvg_name);
-            let norm_name = normalize_name(&current_name);
-            let prog = epg_data.get(&norm_tvg).or_else(|| epg_data.get(&norm_name)).cloned();
-            
-            channels.push(Channel {
-                name: current_name.clone(),
-                tvg_name: current_tvg_name.clone(),
-                group: current_group.clone(),
-                url: line.trim().to_string(),
-                epg_now: prog,
-            });
-            current_tvg_name.clear();
-            current_group.clear();
+            tvg = re_tvg.captures(line).map(|c| c.get(1).unwrap().as_str().to_string()).unwrap_or_default();
+            if let Some(pos) = line.rfind(',') { name = line[pos+1..].trim().to_string(); if tvg.is_empty() { tvg = name.clone(); } }
+        } else if line.starts_with("#EXTGRP:") { grp = line[8..].trim().to_string(); }
+        else if line.starts_with("http") {
+            if grp.is_empty() { grp = "Other".to_string(); }
+            groups.insert(grp.clone());
+            let prog = epg.get(&normalize_name(&tvg)).or_else(|| epg.get(&normalize_name(&name))).cloned();
+            chans.push(Channel { name: name.clone(), group: grp.clone(), url: line.trim().to_string(), epg_now: prog, icon: None });
+            tvg.clear(); grp.clear();
         }
     }
-
-    let data = serde_json::json!({
-        "groups": sorted_vec(groups),
-        "channels": channels
-    });
-    fs::write(json_path, serde_json::to_string(&data)?)
-?;    Ok(())
+    fs::write(json_p, serde_json::to_string(&CacheData { groups: sorted_vec(groups), channels: chans })?)?;
+    let rad: serde_json::Value = client.get(RADIO_API).header(REFERER, "https://www.radiorecord.ru/").header(ACCEPT, "application/json").send().await?.json().await?;
+    let (mut r_stations, mut r_genres) = (Vec::new(), std::collections::HashSet::new());
+    if let Some(stations) = rad["result"]["stations"].as_array() {
+        for st in stations {
+            let (n, u, i_u) = (st["title"].as_str().unwrap_or_default(), st["stream_320"].as_str().unwrap_or_default(), st["icon_fill_colored"].as_str().unwrap_or_default());
+            let i_p = icons_d.join(format!("{}.png", n.replace("/", "_")));
+            if !i_p.exists() && !i_u.is_empty() { let _ = download_file(i_u, &i_p, false).await; }
+            if let Some(gs) = st["genre"].as_array() {
+                for g in gs {
+                    let gn = g["name"].as_str().unwrap_or_default().to_string();
+                    r_genres.insert(gn.clone());
+                    r_stations.push(Channel { name: n.to_string(), group: gn, url: u.to_string(), epg_now: None, icon: Some(i_p.to_string_lossy().to_string()) });
+                }
+            }
+        }
+    }
+    fs::write(radio_p, serde_json::to_string(&CacheData { groups: sorted_vec(r_genres), channels: r_stations })?)?;
+    println!("✨ {}", style("Update complete!").green().bold());
+    Ok(())
 }
 
-fn sorted_vec(hs: std::collections::HashSet<String>) -> Vec<String> {
-    let mut v: Vec<_> = hs.into_iter().collect();
-    v.sort();
-    v
+fn sorted_vec(hs: std::collections::HashSet<String>) -> Vec<String> { let mut v: Vec<_> = hs.into_iter().collect(); v.sort(); v }
+
+fn get_local() -> Vec<Channel> {
+    let mut c = Vec::new();
+    if let Ok(es) = fs::read_dir("/home/admin/Downloads") {
+        for e in es.filter_map(|e| e.ok()) {
+            let p = e.path();
+            if p.extension().map_or(false, |ex| ex == "m3u" || ex == "m3u8") {
+                c.push(Channel { name: p.file_name().unwrap().to_string_lossy().to_string(), group: "Downloads".to_string(), url: p.to_string_lossy().to_string(), epg_now: None, icon: None });
+            }
+        }
+    }
+    c
+}
+
+async fn run_interactive() -> Result<()> {
+    let term = Term::stdout();
+    let theme = ColorfulTheme::default();
+    let (_, json_p, radio_p, _) = get_cache_paths();
+
+    'source_loop: loop {
+        term.clear_screen()?;
+        println!("{}", style(" NIGHT CITY NEON HUB ").on_magenta().black().bold());
+        let sources = vec!["📺 IPTV", "📻 RADIO", "📂 LOCAL (Downloads)", "🔄 UPDATE CACHE", "🚪 EXIT"];
+        let source_selection = Select::with_theme(&theme).with_prompt("Select Source (Esc to Exit)").items(&sources).default(0).interact_opt()?;
+        
+        let source_idx = match source_selection {
+            Some(4) | None => break 'source_loop,
+            Some(idx) => idx,
+        };
+
+        if source_idx == 3 { update_data().await?; continue; }
+
+        let is_radio = source_idx == 1;
+        let is_local = source_idx == 2;
+        let data = if is_local { CacheData { groups: vec!["Downloads".into()], channels: get_local() } } else {
+            let path = if is_radio { &radio_p } else { &json_p };
+            if !path.exists() { update_data().await?; }
+            serde_json::from_str(&fs::read_to_string(path)?)?
+        };
+
+        'category_loop: loop {
+            let mut groups = vec!["🌐 ALL".to_string()];
+            groups.extend(data.groups.clone());
+            groups.push("🔙 BACK TO SOURCES".to_string());
+            
+            let category_selection = Select::with_theme(&theme).with_prompt("Select Category (Esc for Back)").items(&groups).default(0).interact_opt()?;
+            let group_idx = match category_selection { Some(idx) => idx, None => break 'category_loop };
+            let group = &groups[group_idx];
+            if group == "🔙 BACK TO SOURCES" { break 'category_loop; }
+
+            'channel_loop: loop {
+                let filtered: Vec<&Channel> = data.channels.iter().filter(|c| group == "🌐 ALL" || &c.group == group).collect();
+                let mut names: Vec<String> = filtered.iter().map(|c| format!("{} | {}", style(&c.name).cyan(), c.epg_now.as_deref().unwrap_or("..."))).collect();
+                names.push("🔙 BACK TO CATEGORIES".to_string());
+                
+                let chan_selection = FuzzySelect::with_theme(&theme).with_prompt(format!("{} > Channel (Esc for Back)", group)).items(&names).default(0).interact_opt()?;
+                let chan_idx = match chan_selection { Some(idx) => idx, None => break 'channel_loop };
+                if chan_idx == filtered.len() { break 'channel_loop; }
+                
+                let chan = filtered[chan_idx];
+                let _ = Command::new("pkill").args(["-9", "-f", "mpv"]).status();
+                
+                let mut cmd = Command::new("mpv");
+                cmd.arg(format!("--user-agent={}", UA))
+                   .arg(format!("--title={}", chan.name))
+                   .arg("--no-terminal").arg("--ontop").arg("--fs")
+                   .arg("--no-resume-playback").arg("--cache=yes");
+                
+                if is_radio { cmd.arg("--no-video").arg("--volume=80"); }
+                cmd.arg(&chan.url);
+                
+                cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).stdin(std::process::Stdio::null());
+
+                unsafe {
+                    cmd.pre_exec(|| {
+                        libc::setsid();
+                        Ok(())
+                    });
+                }
+
+                if let Ok(_) = cmd.spawn() {
+                    let _ = term.clear_screen();
+                    std::process::exit(0);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let (_, json_path) = get_cache_paths();
-
     match cli.command {
-        Commands::Update => update_data().await?,
-        Commands::Groups => {
-            if !json_path.exists() { update_data().await?; }
-            let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(json_path)?)?;
-            println!("⭐ FAVORITES");
-            println!("🌐 ALL CHANNELS");
-            if let Some(groups) = data["groups"].as_array() {
-                for g in groups {
-                    println!("{}", g.as_str().unwrap());
-                }
-            }
-        }
-        Commands::Channels { group } => {
-            let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(json_path)?)?;
-            let channels: Vec<Channel> = serde_json::from_value(data["channels"].clone())?;
-            for c in channels {
-                if group == "🌐 ALL CHANNELS" || c.group == group {
-                    let prog = c.epg_now.unwrap_or_else(|| "No Program Info".to_string());
-                    println!("[{}] {} | NOW: {} :: {} :: {}", c.group, c.name, prog, c.url, c.name);
-                }
-            }
-        }
-        Commands::Play(args) => {
-            Command::new("mpv")
-                .arg(format!("--title={}", args.title))
-                .arg(format!("--force-media-title={}", args.title))
-                .arg("--config-dir=/home/admin/Gemini")
-                .arg(args.url)
-                .spawn()?
-                .wait()?;
-        }
+        Some(Commands::Update) => update_data().await?,
+        _ => run_interactive().await?,
     }
     Ok(())
 }
