@@ -7,7 +7,7 @@ use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use flate2::read::GzDecoder;
-use chrono::{Local, NaiveDateTime};
+use chrono::{Local, Utc, NaiveDateTime};
 use clap::{Parser, Subcommand};
 use regex::Regex;
 use reqwest::header::{USER_AGENT, REFERER, ACCEPT};
@@ -77,7 +77,16 @@ fn normalize_name(name: &str) -> String {
 }
 
 fn parse_epg_time(time_str: &str) -> i64 {
+    // Формат XMLTV обычно: YYYYMMDDHHMMSS +HHMM
+    // Пример: 20251227080000 +0300
     if time_str.len() < 14 { return 0; }
+    
+    // Пытаемся распарсить с учетом смещения часового пояса
+    if let Ok(dt) = chrono::DateTime::parse_from_str(time_str, "%Y%m%d%H%M%S %z") {
+        return dt.timestamp();
+    }
+    
+    // Резервный вариант, если смещения нет
     if let Ok(naive) = NaiveDateTime::parse_from_str(&time_str[0..14], "%Y%m%d%H%M%S") {
         return naive.and_utc().timestamp();
     }
@@ -90,7 +99,7 @@ fn parse_epg(path: &Path) -> std::collections::HashMap<String, String> {
     if file.is_none() { return epg_map; }
     let mut reader = Reader::from_reader(std::io::BufReader::new(file.unwrap()));
     reader.config_mut().trim_text(true);
-    let now = Local::now().timestamp();
+    let now = Utc::now().timestamp();
     let mut channel_id_to_name = std::collections::HashMap::new();
     let mut buf = Vec::new();
     let (mut cur_id, mut in_disp, mut in_prog, mut prog_id, mut skip) = (String::new(), false, false, String::new(), false);
