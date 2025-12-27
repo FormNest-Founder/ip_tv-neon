@@ -184,7 +184,17 @@ async fn update_data() -> Result<()> {
             if grp.is_empty() { grp = "Other".to_string(); }
             groups.insert(grp.clone());
             let prog = epg.get(&normalize_name(&tvg)).or_else(|| epg.get(&normalize_name(&name))).cloned();
-            chans.push(Channel { name: name.clone(), group: grp.clone(), url: line.trim().to_string(), epg_now: prog, icon: Some(logo.clone()) });
+            
+            // Скачиваем иконку канала, если её нет
+            let icon_path = if !logo.is_empty() {
+                let p = icons_d.join(format!("{}.png", normalize_name(&name).replace(" ", "_")));
+                if !p.exists() {
+                    let _ = download_file(&logo, &p, false).await;
+                }
+                Some(p.to_string_lossy().to_string())
+            } else { None };
+
+            chans.push(Channel { name: name.clone(), group: grp.clone(), url: line.trim().to_string(), epg_now: prog, icon: icon_path });
             tvg.clear(); grp.clear(); logo.clear();
         }
     }
@@ -225,6 +235,18 @@ fn get_local() -> Vec<Channel> {
     c
 }
 
+fn get_chafa_logo(path: &str) -> String {
+    let output = Command::new("chafa")
+        .args(["--size", "4x2", "--format", "symbols", path])
+        .output();
+    
+    if let Ok(out) = output {
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    } else {
+        "".to_string()
+    }
+}
+
 async fn run_interactive() -> Result<()> {
     let term = Term::stdout();
     let theme = ColorfulTheme::default();
@@ -261,31 +283,47 @@ async fn run_interactive() -> Result<()> {
             let group = &groups[group_idx];
             if group == "🔙 BACK TO SOURCES" { break 'category_loop; }
 
-                        'channel_loop: loop {
+                                    'channel_loop: loop {
 
-                            let filtered: Vec<&Channel> = data.channels.iter().filter(|c| group == "🌐 ALL" || &c.group == group).collect();
+                                        let filtered: Vec<&Channel> = data.channels.iter().filter(|c| group == "🌐 ALL" || &c.group == group).collect();
 
-                            let mut names: Vec<String> = filtered.iter().map(|c| {
+                                        let mut names: Vec<String> = filtered.iter().map(|c| {
 
-                                let icon = if is_radio { 
+                                            let logo_str = if let Some(ref path) = c.icon {
 
-                                    style("󰙺").magenta() 
+                                                if Path::new(path).exists() {
 
-                                } else if is_local { 
+                                                    get_chafa_logo(path)
 
-                                    style("󰉋").yellow() 
+                                                } else { "".to_string() }
 
-                                } else { 
+                                            } else { "".to_string() };
 
-                                    style("󰵗").cyan() 
+                        
 
-                                };
+                                            let icon = if !logo_str.is_empty() {
 
-                                format!("{} {} | {}", icon, style(&c.name).bold(), style(c.epg_now.as_deref().unwrap_or("...")).dim())
+                                                logo_str
 
-                            }).collect();
+                                            } else if is_radio { 
 
-                            names.push(format!("{} 🔙 BACK TO CATEGORIES", style("󰌍").red()));
+                                                style("󰙺").magenta().to_string() 
+
+                                            } else if is_local { 
+
+                                                style("󰉋").yellow().to_string() 
+
+                                            } else { 
+
+                                                style("󰵗").cyan().to_string() 
+
+                                            };
+
+                                            format!("{} {} | {}", icon, style(&c.name).bold(), style(c.epg_now.as_deref().unwrap_or("...")).dim())
+
+                                        }).collect();
+
+                                        names.push(format!("{} 🔙 BACK TO CATEGORIES", style("󰌍").red()));
 
                             
 
