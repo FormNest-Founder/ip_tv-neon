@@ -791,12 +791,7 @@ async fn main() -> Result<()> {
                                 let i = app.m_state.selected().unwrap_or(0);
                                 app.m_state.select(Some(if i == 9 { 0 } else { i + 1 }));
                             },
-                            KeyCode::Char('h') => {
-                                app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| app.config.history.contains(&c.url)).map(|(i, _)| i).collect();
-                                app.title = " History ".into();
-                                app.ch_state.select(Some(0));
-                                app.screen = Screen::ChanList;
-                            },
+                            KeyCode::Char('h') => app.screen = Screen::Settings,
                             KeyCode::Char('i') => app.screen = Screen::CatList,
                             KeyCode::Char('r') => {
                                 app.screen = Screen::RadioList;
