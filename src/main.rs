@@ -1104,7 +1104,7 @@ async fn main() -> Result<()> {
                                     app.run_mpv(&u, &n, "", false);
                                     app.config.history.retain(|x| x != &u);
                                     app.config.history.insert(0, u);
-                                    app.config.history.truncate(10);
+                                    app.config.history.truncate(20);
                                     let _ = app.config.save();
                                 }
                             } // Play channel and save to history
