@@ -20,4 +20,4 @@ tokio = { version = "1.36", features = ["full"] }
 urlencoding = "2.1"
 flate2 = "1.0"
 dirs = "5.0"
-ksni = "0.2" # Библиотека для системного трея (KDE/Linux)
+ksni = "0.3" # Библиотека для системного трея (KDE/Linux)

@@ -3,9 +3,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -29,7 +27,6 @@ const RADIO_API: &str = "https://www.radiorecord.ru/api/stations";
 const RADIO_NOW_API: &str = "https://www.radiorecord.ru/api/stations/now";
 const RECOMMENDED_EPG: &str = "http://epg.one/ru.xml.gz";
 
-static TRAY_RUNNING: AtomicBool = AtomicBool::new(false);
 static NORM_RE: OnceLock<Regex> = OnceLock::new();
 static BRAND_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -150,47 +147,6 @@ struct TorrFile {
     name: String,
     index: i32,
     size: i64,
-}
-
-struct RadioTray {
-    title: String,
-}
-impl ksni::Tray for RadioTray {
-    fn icon_name(&self) -> String {
-        "media-playback-start".into()
-    }
-    fn title(&self) -> String {
-        self.title.clone()
-    }
-    fn tool_tip(&self) -> ksni::ToolTip {
-        ksni::ToolTip {
-            title: "Neon Player".into(),
-            description: self.title.clone(),
-            ..Default::default()
-        }
-    }
-    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        use ksni::menu::*;
-        vec![StandardItem {
-            label: "Stop & Close".into(),
-            activate: Box::new(|_| {
-                let _ = Command::new("pkill").args(["-9", "-f", "mpv"]).status();
-                TRAY_RUNNING.store(false, Ordering::Relaxed);
-            }),
-            ..Default::default()
-        }
-        .into()]
-    }
-}
-fn start_tray(title: String) {
-    TRAY_RUNNING.store(true, Ordering::Relaxed);
-    thread::spawn(move || {
-        let s = ksni::TrayService::new(RadioTray { title });
-        s.spawn();
-        while TRAY_RUNNING.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(500));
-        }
-    });
 }
 
 fn normalize(s: &str) -> String {
@@ -487,7 +443,7 @@ impl App {
     }
     fn stop_all(&mut self) {
         let _ = Command::new("pkill").args(["-9", "-f", "mpv"]).status();
-        TRAY_RUNNING.store(false, Ordering::Relaxed);
+        
     }
     fn run_mpv(&mut self, url: &str, title: &str, sub_title: &str, radio: bool) {
         self.stop_all();
@@ -514,7 +470,7 @@ impl App {
             .stdin(Stdio::null());
         if radio {
             c.arg("--no-video");
-            start_tray(title.to_string());
+            
         } else if self.config.video_fullscreen {
             c.arg("--fs");
         } else {
