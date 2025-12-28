@@ -790,6 +790,17 @@ async fn main() -> Result<()> {
                             KeyCode::Down => {
                                 let i = app.m_state.selected().unwrap_or(0);
                                 app.m_state.select(Some(if i == 9 { 0 } else { i + 1 }));
+                            },
+                            KeyCode::Char('h') => {
+                                app.filtered = app.data.channels.iter().enumerate().filter(|(_, c)| app.config.history.contains(&c.url)).map(|(i, _)| i).collect();
+                                app.title = " History ".into();
+                                app.ch_state.select(Some(0));
+                                app.screen = Screen::ChanList;
+                            },
+                            KeyCode::Char('i') => app.screen = Screen::CatList,
+                            KeyCode::Char('r') => {
+                                app.screen = Screen::RadioList;
+                                // (В идеале тут бы еще обновить треки, но оставим пока так для стабильности)
                             }
                             KeyCode::Enter => match app.m_state.selected().unwrap_or(0) {
                                 0 => app.screen = Screen::CatList,
