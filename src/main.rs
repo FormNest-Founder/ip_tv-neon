@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -31,9 +31,13 @@ static NORM_RE: OnceLock<Regex> = OnceLock::new();
 static BRAND_RE: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Parser)]
+#[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+    /// Enable debug logging to stderr and file
+    #[arg(short, long)]
+    debug: bool,
 }
 #[derive(Subcommand)]
 enum Commands {
@@ -46,8 +50,6 @@ struct Config {
     playlist_url: String,
     epg_url: String,
     theme_color: (u8, u8, u8),
-    #[serde(default)]
-    torrserve_url: String,
     #[serde(default)]
     favorites: HashSet<String>,
     #[serde(default)]
@@ -70,7 +72,6 @@ impl Default for Config {
             playlist_url: "http://epg.one/edem_epg_ico2.m3u8".into(),
             epg_url: RECOMMENDED_EPG.into(),
             theme_color: (0, 255, 255),
-            torrserve_url: "http://localhost:8090".into(),
             favorites: HashSet::new(),
             history: Vec::new(),
             video_fullscreen: true,
@@ -91,9 +92,6 @@ impl Config {
             cfg.epg_url = RECOMMENDED_EPG.into();
             let _ = cfg.save();
         }
-        if cfg.torrserve_url.is_empty() {
-            cfg.torrserve_url = "http://localhost:8090".into();
-        }
         cfg
     }
     fn save(&self) -> Result<()> {
@@ -101,7 +99,8 @@ impl Config {
             .unwrap_or_else(|| ".".into())
             .join("neon-iptv");
         let _ = fs::create_dir_all(&d);
-        fs::write(d.join("config.json"), serde_json::to_string_pretty(self)?)?;
+        fs::write(d.join("config.json"), serde_json::to_string_pretty(self)?)
+            ?;
         Ok(())
     }
 }
@@ -137,22 +136,10 @@ struct AppData {
     name_to_id: HashMap<String, String>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
-struct TorrEntry {
-    title: String,
-    hash: String,
-}
-#[derive(Deserialize, Clone, Debug)]
-struct TorrFile {
-    name: String,
-    index: i32,
-    size: i64,
-}
-
 fn normalize(s: &str) -> String {
     let re = NORM_RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\(.*\)|HD|FHD|UHD|SD|4K|RU|BY|UA|KAZ|UZB|EST|LAT|LIT|PL|DE|FR|EN|ORIGIN|V\.2|V\.3|\+",
+            r"(?i)\(.*\)|HD|FHD|UHD|SD|4K|RU|BY|UA|KAZ|UZB|EST|LAT|LIT|PL|DE|FR|EN|ORIGIN|V\.2|V\.3|\+"
         )
         .unwrap()
     });
@@ -174,8 +161,21 @@ fn parse_xml_time(s: &str) -> i64 {
     0
 }
 
+fn main_log(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open("/tmp/ip_tv_debug.log") {
+        let _ = writeln!(file, "[{}] {}", Local::now().format("%H:%M:%S"), msg);
+    }
+}
+
 async fn update_data(config: &Config) -> Result<()> {
-    let client = reqwest::Client::builder().user_agent(UA).build()?;
+    main_log("Starting update_data...");
+    let client = reqwest::Client::builder()
+        .user_agent(UA)
+        .timeout(Duration::from_secs(15))
+        .build()?;
+    
+    main_log("Fetching radio stations...");
     let mut radio = Vec::new();
     if let Ok(r) = client.get(RADIO_API).send().await
         && let Ok(j) = r.json::<serde_json::Value>().await
@@ -194,16 +194,44 @@ async fn update_data(config: &Config) -> Result<()> {
             });
         }
     }
-    let m3u = if config.playlist_url.starts_with("http") {
-        client.get(&config.playlist_url).send().await?.text().await?
+    
+    main_log("Fetching playlist...");
+    let m3u_res = if config.playlist_url.starts_with("http") {
+        let url = config.playlist_url.clone();
+        let fut = client.get(&url).send();
+        match tokio::time::timeout(Duration::from_secs(15), fut).await {
+            Ok(Ok(resp)) => {
+                if !resp.status().is_success() {
+                    return Err(anyhow::anyhow!("HTTP Error: {}", resp.status()));
+                }
+                let bytes = resp.bytes().await?;
+                main_log(&format!("Playlist download finished ({} bytes)", bytes.len()));
+                Ok(String::from_utf8_lossy(&bytes).to_string())
+            },
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => {
+                main_log("Playlist download TIMEOUT (15s)");
+                Err(anyhow::anyhow!("Playlist timeout"))
+            }
+        }
     } else {
-        std::fs::read_to_string(&config.playlist_url)?
+        std::fs::read_to_string(&config.playlist_url).map_err(|e| e.into())
     };
+
+    let m3u = match m3u_res {
+        Ok(s) => s,
+        Err(e) => {
+            main_log(&format!("ERROR fetching playlist: {:?}", e));
+            return Err(e);
+        }
+    };
+    
+    main_log("Parsing channels...");
     let mut channels = Vec::new();
     let mut groups = HashSet::new();
     let mut cur_grp = "Other".to_string();
-    let re_id = Regex::new(r#"tvg-id="([^"]+)""#).unwrap();
-    let re_name = Regex::new(r#"tvg-name="([^"]+)""#).unwrap();
+    let re_id = Regex::new(r#"#EXTINF:.*tvg-id="([^"]+)""#).unwrap();
+    let re_name = Regex::new(r#"#EXTINF:.*tvg-name="([^"]+)""#).unwrap();
     for line in m3u.lines() {
         if line.starts_with("#EXTINF:") {
             let tid = re_id.captures(line).map(|c| c[1].to_string());
@@ -224,9 +252,12 @@ async fn update_data(config: &Config) -> Result<()> {
             ch.url = line.to_string();
         }
     }
+    
+    main_log(&format!("Fetching EPG from {}...", config.epg_url));
     let mut epg: HashMap<String, Vec<EpgProgram>> = HashMap::new();
     let mut name_to_id: HashMap<String, String> = HashMap::new();
     if let Ok(r) = client.get(&config.epg_url).send().await {
+        main_log("EPG download finished, starting parser...");
         let b = r.bytes().await?;
         let reader_raw: Box<dyn BufRead> = if config.epg_url.ends_with(".gz") {
             Box::new(BufReader::new(GzDecoder::new(&b[..])))
@@ -284,11 +315,7 @@ async fn update_data(config: &Config) -> Result<()> {
                 }
                 Ok(XmlEvent::Text(e)) => {
                     let text = e.unescape().unwrap_or_default().into_owned();
-                    if tag == "display-name"
-                        && (lang == "ru"
-                            || lang.is_empty()
-                            || !name_to_id.contains_key(&normalize(&text)))
-                    {
+                    if tag == "display-name" && (lang == "ru" || lang.is_empty() || !name_to_id.contains_key(&normalize(&text))) {
                         name_to_id.insert(normalize(&text), cur_id.clone());
                     }
                     if let Some(p) = cur_prog.as_mut() {
@@ -307,7 +334,7 @@ async fn update_data(config: &Config) -> Result<()> {
                     }
                 }
                 Ok(XmlEvent::Eof) => break,
-                _ => {}
+                _ => {} // Ignore other events
             }
             buf.clear();
         }
@@ -326,16 +353,14 @@ async fn update_data(config: &Config) -> Result<()> {
         File::create(Path::new(CACHE_DIR).join("data.bin"))?,
         &data,
     )?;
+    main_log("update_data finished.");
     Ok(())
 }
 
 async fn fetch_radio_now() -> HashMap<i64, String> {
     let client = reqwest::Client::builder().user_agent(UA).build().unwrap();
     let mut map = HashMap::new();
-    if let Ok(r) = client.get(RADIO_NOW_API).send().await
-        && let Ok(j) = r.json::<serde_json::Value>().await
-        && let Some(res) = j["result"].as_array()
-    {
+    if let Ok(r) = client.get(RADIO_NOW_API).send().await && let Ok(j) = r.json::<serde_json::Value>().await && let Some(res) = j["result"].as_array() {
         for st in res {
             let id = st["id"].as_i64().unwrap_or(0);
             let artist = st["track"]["artist"].as_str().unwrap_or("");
@@ -349,9 +374,7 @@ async fn fetch_radio_now() -> HashMap<i64, String> {
 }
 
 fn find_epg_id(ch: &Channel, data: &AppData) -> Option<String> {
-    if let Some(id) = &ch.tvg_id
-        && data.epg.contains_key(id)
-    {
+    if let Some(id) = &ch.tvg_id && data.epg.contains_key(id) {
         return Some(id.clone());
     }
     if let Some(id) = data.name_to_id.get(&ch.norm_name) {
@@ -360,8 +383,7 @@ fn find_epg_id(ch: &Channel, data: &AppData) -> Option<String> {
     if let Some(id) = ch
         .tvg_id
         .as_ref()
-        .and_then(|tid| data.name_to_id.get(&normalize(tid)))
-    {
+        .and_then(|tid| data.name_to_id.get(&normalize(tid))) {
         return Some(id.clone());
     }
     None
@@ -374,6 +396,29 @@ fn get_current_epg<'a>(ch: &Channel, data: &'a AppData, now: i64) -> Option<&'a 
         .and_then(|progs| progs.iter().find(|p| p.start <= now && p.stop > now))
 }
 
+fn scan_local_playlists() -> Vec<PathBuf> {
+    main_log("Scanning local playlists in Downloads...");
+    let mut files = Vec::new();
+    if let Some(dir) = dirs::download_dir() {
+        main_log(&format!("Found Downloads dir at: {:?}", dir));
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext.eq_ignore_ascii_case("m3u") || ext.eq_ignore_ascii_case("m3u8") {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    } else {
+        main_log("Downloads dir NOT FOUND.");
+    }
+    files.sort();
+    main_log(&format!("Scan finished, found {} files.", files.len()));
+    files
+}
+
 #[derive(PartialEq)]
 enum Screen {
     MainMenu,
@@ -384,8 +429,7 @@ enum Screen {
     Settings,
     Input,
     Updating,
-    TorrList,
-    TorrFiles,
+    LocalList,
     LinkInput,
 }
 struct App {
@@ -397,8 +441,7 @@ struct App {
     ch_state: ListState,
     r_state: ListState,
     s_state: ListState,
-    t_state: ListState,
-    f_state: ListState,
+    l_state: ListState, // Local List State
     filtered: Vec<usize>,
     search: String,
     is_search: bool,
@@ -406,9 +449,8 @@ struct App {
     in_tgt: String,
     quit: bool,
     title: String,
-    torrents: Vec<TorrEntry>,
-    torr_files: Vec<TorrFile>,
-    sel_hash: String,
+    local_files: Vec<PathBuf>,
+    last_error: Option<String>,
 }
 impl App {
     fn new(config: Config) -> Self {
@@ -425,8 +467,7 @@ impl App {
             ch_state: ListState::default(),
             r_state: ListState::default(),
             s_state: ListState::default(),
-            t_state: ListState::default(),
-            f_state: ListState::default(),
+            l_state: ListState::default(),
             filtered: Vec::new(),
             search: "".into(),
             is_search: false,
@@ -434,9 +475,8 @@ impl App {
             in_tgt: "".into(),
             quit: false,
             title: "".into(),
-            torrents: Vec::new(),
-            torr_files: Vec::new(),
-            sel_hash: "".into(),
+            local_files: Vec::new(),
+            last_error: None,
         };
         app.m_state.select(Some(0));
         app
@@ -515,18 +555,22 @@ fn ui(f: &mut Frame, app: &mut App) {
         }
         Screen::MainMenu => {
             let chunks = Layout::default()
-                .constraints([Constraint::Length(8), Constraint::Min(0)])
+                .constraints([Constraint::Length(10), Constraint::Min(0)])
                 .split(area);
+            let mut status_text = "   NEON HUB\n   V 0.7.0".to_string();
+            if let Some(err) = &app.last_error {
+                status_text.push_str(&format!("\n\n❌ {}", err));
+            }
             f.render_widget(
-                Paragraph::new("   NEON HUB\n   V 0.6.3")
+                Paragraph::new(status_text)
                     .alignment(Alignment::Center)
-                    .fg(Color::Cyan),
+                    .fg(if app.last_error.is_some() { Color::Red } else { Color::Cyan }),
                 chunks[0],
             );
             let items = [
                 "📺 IPTV",
                 "📻 RADIO",
-                "📥 TORRSERVE",
+                "📂 LOCAL",
                 "🔗 PLAY LINK",
                 "⭐ FAVORITES",
                 "🕒 HISTORY",
@@ -636,33 +680,18 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .highlight_style(Style::default().bg(Color::Rgb(50, 20, 50)));
             f.render_stateful_widget(list, area, &mut app.r_state);
         }
-        Screen::TorrList => {
+        Screen::LocalList => {
             let items: Vec<ListItem> = app
-                .torrents
+                .local_files
                 .iter()
-                .map(|t| ListItem::new(format!("🎬 {}", t.title)))
-                .collect();
-            let list = List::new(items)
-                .block(Block::default().title(" TorrServe Torrents "))
-                .highlight_style(Style::default().bg(Color::Rgb(60, 0, 100)));
-            f.render_stateful_widget(list, area, &mut app.t_state);
-        }
-        Screen::TorrFiles => {
-            let items: Vec<ListItem> = app
-                .torr_files
-                .iter()
-                .map(|f| {
-                    ListItem::new(format!(
-                        "📄 {} ({:.2} GB)",
-                        f.name,
-                        f.size as f64 / 1073741824.0
-                    ))
+                .map(|p| {
+                    ListItem::new(format!("📄 {}", p.file_name().unwrap_or_default().to_string_lossy()))
                 })
                 .collect();
             let list = List::new(items)
-                .block(Block::default().title(" Torrent Files "))
-                .highlight_style(Style::default().bg(Color::Rgb(20, 20, 50)));
-            f.render_stateful_widget(list, area, &mut app.f_state);
+                .block(Block::default().title(" Local Playlists (Downloads) "))
+                .highlight_style(Style::default().bg(Color::Rgb(20, 60, 20)));
+            f.render_stateful_widget(list, area, &mut app.l_state);
         }
         Screen::Detail => {
             let idx = app.filtered[app.ch_state.selected().unwrap_or(0)];
@@ -678,8 +707,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             );
             let mut txt = "No description available.".to_string();
             if let Some(id) = find_epg_id(ch, &app.data)
-                && let Some(progs) = app.data.epg.get(&id)
-            {
+                && let Some(progs) = app.data.epg.get(&id) {
                 let now = Utc::now().timestamp();
                 let mut lines = Vec::new();
                 if let Some(p) = progs.iter().find(|p| p.start <= now && p.stop > now) {
@@ -713,10 +741,11 @@ fn ui(f: &mut Frame, app: &mut App) {
             let items = [
                 format!("Playlist: {}", app.config.playlist_url),
                 format!("EPG: {}", app.config.epg_url),
-                format!("TorrServe: {}", app.config.torrserve_url),
                 format!(
                     "Theme RGB: {},{},{}",
-                    app.config.theme_color.0, app.config.theme_color.1, app.config.theme_color.2
+                    app.config.theme_color.0,
+                    app.config.theme_color.1,
+                    app.config.theme_color.2
                 ),
                 "Save & Exit".into(),
             ];
@@ -749,10 +778,50 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 }
 
+fn set_panic_hook() {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        hook(info);
+    }));
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _cli = Cli::parse();
+    main_log("Starting main...");
+    let cli = Cli::parse();
+    set_panic_hook();
+    
+    main_log("Loading config...");
     let config = Config::load();
+    main_log("Config loaded.");
+
+    if let Some(Commands::Update) = cli.command {
+        main_log("Update mode triggered via CLI.");
+        if let Err(e) = update_data(&config).await {
+            eprintln!("Update failed: {}", e);
+            std::process::exit(1);
+        } else {
+            println!("Update successful.");
+            return Ok(());
+        }
+    }
+
+    if cli.debug {
+        eprintln!("Debug mode enabled. Logging to stderr.");
+    }
+
+    let mut initial_error = None;
+    if !Path::new(CACHE_DIR).join("data.bin").exists() {
+        main_log("Cache missing, triggering update before UI init...");
+        if let Err(e) = update_data(&config).await {
+            let err_msg = format!("Update Failed: {}", e);
+            main_log(&err_msg);
+            initial_error = Some(err_msg);
+        }
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -762,14 +831,15 @@ async fn main() -> Result<()> {
         event::EnableBracketedPaste
     )?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+    
+    main_log("Initializing App...");
     let mut app = App::new(config);
-    if !Path::new(CACHE_DIR).join("data.bin").exists() {
-        app.screen = Screen::Updating;
-        terminal.draw(|f| ui(f, &mut app))?;
-        update_data(&app.config).await?;
-        app = App::new(Config::load());
+    if let Some(e) = initial_error {
+        app.last_error = Some(e);
     }
-    let client = reqwest::Client::builder().user_agent(UA).build()?;
+    main_log("App initialized.");
+    
+    // Legacy update block removed from here
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
         if event::poll(Duration::from_millis(100))? {
@@ -800,7 +870,6 @@ async fn main() -> Result<()> {
                             KeyCode::Char('i') => app.screen = Screen::CatList,
                             KeyCode::Char('r') => {
                                 app.screen = Screen::RadioList;
-                                // (В идеале тут бы еще обновить треки, но оставим пока так для стабильности)
                             }
                             KeyCode::Enter => match app.m_state.selected().unwrap_or(0) {
                                 0 => app.screen = Screen::CatList,
@@ -815,21 +884,9 @@ async fn main() -> Result<()> {
                                     app.screen = Screen::RadioList;
                                 }
                                 2 => {
-                                    app.screen = Screen::Updating;
-                                    terminal.draw(|f| ui(f, &mut app))?;
-                                    if let Ok(r) = client
-                                        .post(format!("{}/torrent", app.config.torrserve_url))
-                                        .json(&serde_json::json!({"action":"list"}))
-                                        .send()
-                                        .await
-                                        && let Ok(torrs) = r.json::<Vec<TorrEntry>>().await
-                                    {
-                                        app.torrents = torrs;
-                                        app.t_state.select(Some(0));
-                                        app.screen = Screen::TorrList;
-                                    } else {
-                                        app.screen = Screen::MainMenu;
-                                    } // Handle error
+                                    app.local_files = scan_local_playlists();
+                                    app.l_state.select(Some(0));
+                                    app.screen = Screen::LocalList;
                                 }
                                 3 => {
                                     app.in_buf.clear();
@@ -866,9 +923,24 @@ async fn main() -> Result<()> {
                                 7 => {
                                     app.screen = Screen::Updating;
                                     terminal.draw(|f| ui(f, &mut app))?;
-                                    update_data(&app.config).await?;
-                                    app = App::new(Config::load());
+                                    match update_data(&app.config).await {
+                                        Ok(_) => {
+                                            app.last_error = None;
+                                            app = App::new(Config::load());
+                                        },
+                                        Err(e) => {
+                                            let err_msg = format!("Update Failed: {}", e);
+                                            if cli.debug {
+                                               use std::io::Write;
+                                               if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open("/tmp/ip_tv_debug.log") {
+                                                   let _ = writeln!(file, "Update error: {:?}", e);
+                                               }
+                                            }
+                                            app.last_error = Some(err_msg);
+                                        }
+                                    }
                                     terminal.clear()?;
+                                    app.screen = Screen::MainMenu;
                                 } // Re-initialize app after update
                                 8 => app.screen = Screen::Settings,
                                 9 => app.quit = true,
@@ -1023,87 +1095,33 @@ async fn main() -> Result<()> {
                             KeyCode::Esc => app.screen = Screen::MainMenu,
                             _ => {} // Ignore other keys
                         },
-                        Screen::TorrList => match key.code {
+                        Screen::LocalList => match key.code {
                             KeyCode::Up => {
-                                let i = app.t_state.selected().unwrap_or(0);
-                                let l = app.torrents.len();
+                                let i = app.l_state.selected().unwrap_or(0);
+                                let l = app.local_files.len();
                                 if l > 0 {
-                                    app.t_state.select(Some(if i == 0 { l - 1 } else { i - 1 }));
+                                    app.l_state.select(Some(if i == 0 { l - 1 } else { i - 1 }));
                                 }
                             }
                             KeyCode::Down => {
-                                let i = app.t_state.selected().unwrap_or(0);
-                                let l = app.torrents.len();
+                                let i = app.l_state.selected().unwrap_or(0);
+                                let l = app.local_files.len();
                                 if l > 0 {
-                                    app.t_state.select(Some(if i == l - 1 { 0 } else { i + 1 }));
+                                    app.l_state.select(Some(if i == l - 1 { 0 } else { i + 1 }));
                                 }
                             }
                             KeyCode::Enter => {
-                                if let Some(i) = app.t_state.selected() {
-                                    let h = app.torrents[i].hash.clone();
-                                    app.sel_hash = h.clone();
-                                    app.screen = Screen::Updating;
-                                    terminal.draw(|f| ui(f, &mut app))?;
-                                    if let Ok(r) = client
-                                        .post(format!("{}/torrent", app.config.torrserve_url))
-                                        .json(&serde_json::json!({"action":"get", "hash":h}))
-                                        .send()
-                                        .await
-                                        && let Ok(j) = r.json::<serde_json::Value>().await
-                                    {
-                                        if let Some(files) = j["file_list"].as_array() {
-                                            app.torr_files = files
-                                                .iter()
-                                                .map(|f| TorrFile {
-                                                    name: f["path"].as_str().unwrap_or("").into(),
-                                                    index: f["id"].as_i64().unwrap_or(0) as i32,
-                                                    size: f["size"].as_i64().unwrap_or(0),
-                                                })
-                                                .collect();
-                                            app.f_state.select(Some(0));
-                                            app.screen = Screen::TorrFiles;
-                                        }
-                                    } else {
-                                        app.screen = Screen::TorrList;
-                                    } // Handle error
+                                if let Some(i) = app.l_state.selected() {
+                                    if let Some(path) = app.local_files.get(i) {
+                                        let url = format!("file://{}", path.display());
+                                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                        app.run_mpv(&url, &name, "Local Playlist", false);
+                                        app.quit = true;
+                                    }
                                 }
                             }
                             KeyCode::Esc => app.screen = Screen::MainMenu,
-                            _ => {} // Ignore other keys
-                        },
-                        Screen::TorrFiles => match key.code {
-                            KeyCode::Up => {
-                                let i = app.f_state.selected().unwrap_or(0);
-                                let l = app.torr_files.len();
-                                if l > 0 {
-                                    app.f_state.select(Some(if i == 0 { l - 1 } else { i - 1 }));
-                                }
-                            }
-                            KeyCode::Down => {
-                                let i = app.f_state.selected().unwrap_or(0);
-                                let l = app.torr_files.len();
-                                if l > 0 {
-                                    app.f_state.select(Some(if i == l - 1 { 0 } else { i + 1 }));
-                                }
-                            }
-                            KeyCode::Enter => {
-                                if let Some(i) = app.f_state.selected() {
-                                    let (url, name) = {
-                                        let f = &app.torr_files[i];
-                                        (
-                                            format!(
-                                                "{}/stream/?link={}&index={}&play",
-                                                app.config.torrserve_url, app.sel_hash, f.index
-                                            ),
-                                            f.name.clone(),
-                                        )
-                                    };
-                                    app.run_mpv(&url, &name, "TorrServe", false);
-                                    app.quit = true;
-                                }
-                            }
-                            KeyCode::Esc => app.screen = Screen::TorrList,
-                            _ => {} // Ignore other keys
+                            _ => {}
                         },
                         Screen::Detail => match key.code {
                             KeyCode::Enter => {
@@ -1125,11 +1143,11 @@ async fn main() -> Result<()> {
                         Screen::Settings => match key.code {
                             KeyCode::Up => {
                                 let i = app.s_state.selected().unwrap_or(0);
-                                app.s_state.select(Some(if i == 0 { 4 } else { i - 1 }));
+                                app.s_state.select(Some(if i == 0 { 3 } else { i - 1 })); // Updated limit to 3
                             }
                             KeyCode::Down => {
                                 let i = app.s_state.selected().unwrap_or(0);
-                                app.s_state.select(Some(if i == 4 { 0 } else { i + 1 }));
+                                app.s_state.select(Some(if i == 3 { 0 } else { i + 1 })); // Updated limit to 3
                             }
                             KeyCode::Enter => match app.s_state.selected().unwrap_or(0) {
                                 0 => {
@@ -1143,11 +1161,6 @@ async fn main() -> Result<()> {
                                     app.screen = Screen::Input;
                                 }
                                 2 => {
-                                    app.in_buf = app.config.torrserve_url.clone();
-                                    app.in_tgt = "TorrServe".into();
-                                    app.screen = Screen::Input;
-                                }
-                                3 => {
                                     app.in_buf = format!(
                                         "{},{},{}",
                                         app.config.theme_color.0,
@@ -1157,7 +1170,7 @@ async fn main() -> Result<()> {
                                     app.in_tgt = "Theme RGB".into();
                                     app.screen = Screen::Input;
                                 }
-                                4 => {
+                                3 => {
                                     let _ = app.config.save();
                                     app.screen = Screen::MainMenu;
                                 } // Save and exit settings
@@ -1181,8 +1194,6 @@ async fn main() -> Result<()> {
                                     if c.len() == 3 {
                                         app.config.theme_color = (c[0], c[1], c[2]);
                                     }
-                                } else {
-                                    app.config.torrserve_url = app.in_buf.clone();
                                 }
                                 app.screen = Screen::Settings;
                             } // Save input and go back to settings
@@ -1224,8 +1235,8 @@ async fn main() -> Result<()> {
             }
         }
         if app.quit {
-            break;
-        } // Exit loop if quit flag is set
+            break; // Exit loop if quit flag is set
+        }
     }
     disable_raw_mode()?;
     execute!(
