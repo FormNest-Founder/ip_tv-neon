@@ -112,6 +112,8 @@ struct Channel {
     url: String,
     tvg_id: Option<String>,
     norm_name: String,
+    #[serde(default)]
+    catchup_days: u32,
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct RadioStation {
@@ -234,16 +236,39 @@ async fn update_data(config: &Config) -> Result<()> {
     let re_name = Regex::new(r#"#EXTINF:.*tvg-name="([^"]+)""#).unwrap();
     for line in m3u.lines() {
         if line.starts_with("#EXTINF:") {
-            let tid = re_id.captures(line).map(|c| c[1].to_string());
-            let tname = re_name.captures(line).map(|c| c[1].to_string());
+                        let tid = re_id.captures(line).map(|c| c[1].to_string());
+                        let tname = re_name.captures(line).map(|c| c[1].to_string());
             let name = line.split(',').next_back().unwrap_or("").trim().to_string();
             let norm = normalize(&name);
+
+            let mut c_days = 0;
+            if let Some(cap) = Regex::new(r#"tvg-rec="?(\d+)"?"#).unwrap().captures(line) {
+                 c_days = cap[1].parse().unwrap_or(0);
+            }
+            if c_days == 0 {
+                if let Some(cap) = Regex::new(r#"catchup-days="?(\d+)"?"#).unwrap().captures(line) {
+                    c_days = cap[1].parse().unwrap_or(0);
+                }
+            }
+            if c_days == 0 {
+                 if let Some(cap) = Regex::new(r#"timeshift="?(\d+)"?"#).unwrap().captures(line) {
+                    c_days = cap[1].parse().unwrap_or(0);
+                }
+            }
+
+            if c_days > 0 && channels.len() < 20 { 
+                 main_log(&format!("ARCHIVE FOUND: {} days for {}", c_days, name));
+            } else if channels.len() < 5 {
+                 main_log(&format!("NO ARCHIVE for: {} (Raw: {})", name, line));
+            }
+
             channels.push(Channel {
                 name,
                 group: cur_grp.clone(),
                 url: "".into(),
                 tvg_id: tid.or(tname),
                 norm_name: norm,
+                catchup_days: c_days,
             });
         } else if let Some(g) = line.strip_prefix("#EXTGRP:") {
             cur_grp = g.trim().to_string();
@@ -339,6 +364,12 @@ async fn update_data(config: &Config) -> Result<()> {
             buf.clear();
         }
     }
+    
+    // Sort EPG to ensure chronological order
+    for list in epg.values_mut() {
+        list.sort_by_key(|p| p.start);
+    }
+
     let mut g_vec: Vec<String> = groups.into_iter().collect();
     g_vec.sort();
     let data = AppData {
@@ -442,6 +473,7 @@ struct App {
     r_state: ListState,
     s_state: ListState,
     l_state: ListState, // Local List State
+    d_state: ListState, // Detail State
     filtered: Vec<usize>,
     search: String,
     is_search: bool,
@@ -468,6 +500,7 @@ impl App {
             r_state: ListState::default(),
             s_state: ListState::default(),
             l_state: ListState::default(),
+            d_state: ListState::default(),
             filtered: Vec::new(),
             search: "".into(),
             is_search: false,
@@ -600,12 +633,16 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .constraints([Constraint::Min(0), Constraint::Length(3)])
                 .split(area);
             let now = Utc::now().timestamp();
-            let items: Vec<ListItem> = app
-                .filtered
+            let items: Vec<ListItem> = if app.filtered.is_empty() {
+                vec![ListItem::new("No channels found. Try Update.")]
+            } else {
+                app.filtered
                 .iter()
                 .map(|&idx| {
+                    if idx >= app.data.channels.len() { return ListItem::new("Error"); }
                     let ch = &app.data.channels[idx];
                     let mut spans = Vec::new();
+                    // ... (rest of the rendering logic)
                     if let Some(cap) = Regex::new(r"^(BCU|BOX|VF|YOSSO|VIP)\s+")
                         .unwrap()
                         .captures(&ch.name)
@@ -641,7 +678,8 @@ fn ui(f: &mut Frame, app: &mut App) {
                     }
                     ListItem::new(Line::from(spans))
                 })
-                .collect();
+                .collect()
+            };
             let list = List::new(items)
                 .block(Block::default().title(app.title.as_str()).borders(Borders::ALL))
                 .highlight_style(Style::default().bg(Color::Rgb(30, 30, 50)));
@@ -694,46 +732,88 @@ fn ui(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(list, area, &mut app.l_state);
         }
         Screen::Detail => {
+            if app.filtered.is_empty() {
+                 f.render_widget(Paragraph::new("No Data"), area);
+                 return;
+            }
             let idx = app.filtered[app.ch_state.selected().unwrap_or(0)];
+            if idx >= app.data.channels.len() {
+                 f.render_widget(Paragraph::new("Index Error"), area);
+                 return;
+            }
             let ch = &app.data.channels[idx];
             let chunks = Layout::default()
                 .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)])
                 .split(area);
-            f.render_widget(
-                Paragraph::new(format!("📺 {}", ch.name))
-                    .fg(Color::Cyan)
-                    .bold(),
-                chunks[0],
-            );
-            let mut txt = "No description available.".to_string();
-            if let Some(id) = find_epg_id(ch, &app.data)
-                && let Some(progs) = app.data.epg.get(&id) {
+            
+            // Header
+            let mut header_spans = vec![
+                Span::styled(format!("📺 {}", ch.name), Style::default().fg(Color::Cyan).bold()),
+            ];
+            if ch.catchup_days > 0 {
+                header_spans.push(Span::styled(
+                    format!(" [DVR: {}d]", ch.catchup_days), 
+                    Style::default().fg(Color::Green)
+                ));
+            }
+            f.render_widget(Paragraph::new(Line::from(header_spans)), chunks[0]);
+
+            // EPG List
+            let mut items = Vec::new();
+            if let Some(id) = find_epg_id(ch, &app.data) && let Some(progs) = app.data.epg.get(&id) {
+                // Filter progs based on catchup_days to avoid showing too old stuff
                 let now = Utc::now().timestamp();
-                let mut lines = Vec::new();
-                if let Some(p) = progs.iter().find(|p| p.start <= now && p.stop > now) {
-                    lines.push(format!("🎬 NOW: {}\n", p.title));
-                    if !p.desc.is_empty() {
-                        lines.push(format!("📖 {}\n", p.desc));
+                let limit = now - (ch.catchup_days as i64 * 86400);
+                
+                // Show valid catchup or future
+                let relevant: Vec<&EpgProgram> = progs.iter()
+                    .filter(|p| p.stop > limit)
+                    .collect();
+                
+                for p in relevant {
+                    let start_dt = DateTime::<Utc>::from_timestamp(p.start, 0).unwrap().with_timezone(&Local);
+                    let time_str = start_dt.format("%d.%m %H:%M").to_string();
+                    
+                    let (icon, style) = if p.start > now {
+                        ("📅", Style::default().fg(Color::DarkGray)) // Future
+                    } else if p.stop < now {
+                        ("⏪", Style::default().fg(Color::Green)) // Past (TimeShift)
+                    } else {
+                        ("🔴", Style::default().fg(Color::Magenta).bold()) // Live
+                    };
+                    
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::styled(format!("{} {} ", icon, time_str), style),
+                        Span::styled(&p.title, Style::default().fg(Color::White)),
+                    ])));
+                }
+            } else {
+                items.push(ListItem::new("No EPG Data"));
+            }
+            
+            let list = List::new(items)
+                .block(Block::default().title(" Schedule (Enter to Play) ").borders(Borders::ALL))
+                .highlight_style(Style::default().bg(Color::Rgb(40, 40, 60)));
+            f.render_stateful_widget(list, chunks[1], &mut app.d_state);
+
+            // Description of selected item
+            let mut desc = "Select a program...".to_string();
+            if let Some(id) = find_epg_id(ch, &app.data) && let Some(progs) = app.data.epg.get(&id) {
+                let now = Utc::now().timestamp();
+                let limit = now - (ch.catchup_days as i64 * 86400);
+                let relevant: Vec<&EpgProgram> = progs.iter().filter(|p| p.stop > limit).collect();
+                if let Some(sel) = app.d_state.selected() {
+                    if let Some(p) = relevant.get(sel) {
+                        desc = p.desc.clone();
                     }
                 }
-                lines.push("\n📅 COMING UP:".into());
-                for p in progs.iter().filter(|p| p.start > now).take(5) {
-                    let s = DateTime::<Utc>::from_timestamp(p.start, 0)
-                        .unwrap()
-                        .with_timezone(&Local)
-                        .format("%H:%M");
-                    lines.push(format!("  {} - {}", s, p.title));
-                }
-                txt = lines.join("\n");
             }
+            
             f.render_widget(
-                Paragraph::new(txt)
-                    .block(Block::default().title(" Schedule & Info ").borders(Borders::ALL))
-                    .wrap(Wrap { trim: true }),
-                chunks[1],
-            );
-            f.render_widget(
-                Paragraph::new("[ENTER] Play  [ESC] Back").alignment(Alignment::Center),
+                Paragraph::new(desc)
+                    .block(Block::default().title(" Info ").borders(Borders::TOP))
+                    .wrap(Wrap { trim: true })
+                    .fg(Color::Gray),
                 chunks[2],
             );
         }
@@ -1051,6 +1131,23 @@ async fn main() -> Result<()> {
                             } // Remove last char from search
                             KeyCode::Enter => {
                                 if !app.filtered.is_empty() {
+                                    // Auto-select current program in Detail view
+                                    if let Some(i) = app.ch_state.selected() {
+                                        let idx = app.filtered[i];
+                                        let ch = &app.data.channels[idx];
+                                        if let Some(id) = find_epg_id(ch, &app.data) && let Some(progs) = app.data.epg.get(&id) {
+                                            let now = Utc::now().timestamp();
+                                            let limit = now - (ch.catchup_days as i64 * 86400);
+                                            let relevant: Vec<&EpgProgram> = progs.iter().filter(|p| p.stop > limit).collect();
+                                            if let Some(pos) = relevant.iter().position(|p| p.start <= now && p.stop > now) {
+                                                app.d_state.select(Some(pos));
+                                            } else {
+                                                app.d_state.select(Some(0));
+                                            }
+                                        } else {
+                                            app.d_state.select(Some(0));
+                                        }
+                                    }
                                     app.screen = Screen::Detail;
                                 }
                             } // Enter detail view
@@ -1124,21 +1221,77 @@ async fn main() -> Result<()> {
                             _ => {}
                         },
                         Screen::Detail => match key.code {
-                            KeyCode::Enter => {
+                            KeyCode::Up => {
+                                let i = app.d_state.selected().unwrap_or(0);
+                                if i > 0 { app.d_state.select(Some(i - 1)); }
+                            }
+                            KeyCode::Down => {
+                                let i = app.d_state.selected().unwrap_or(0);
+                                // Need to calculate actual length of displayed items
+                                let mut len = 0;
                                 if let Some(i) = app.ch_state.selected() {
-                                    let (u, n) = {
-                                        let ch = &app.data.channels[app.filtered[i]];
-                                        (ch.url.clone(), ch.name.clone())
-                                    };
-                                    app.run_mpv(&u, &n, "", false);
-                                    app.config.history.retain(|x| x != &u);
-                                    app.config.history.insert(0, u);
-                                    app.config.history.truncate(20);
-                                    let _ = app.config.save();
+                                    let idx = app.filtered[i];
+                                    let ch = &app.data.channels[idx];
+                                    if let Some(id) = find_epg_id(ch, &app.data) && let Some(progs) = app.data.epg.get(&id) {
+                                        let now = Utc::now().timestamp();
+                                        let limit = now - (ch.catchup_days as i64 * 86400);
+                                        len = progs.iter().filter(|p| p.stop > limit).count();
+                                    }
                                 }
-                            } // Play channel and save to history
+                                if len > 0 && i < len - 1 {
+                                    app.d_state.select(Some(i + 1));
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(sel) = app.d_state.selected() {
+                                    let ch_idx = app.filtered[app.ch_state.selected().unwrap_or(0)];
+                                    let (url, ch_name, catchup_days) = {
+                                        let ch = &app.data.channels[ch_idx];
+                                        (ch.url.clone(), ch.name.clone(), ch.catchup_days)
+                                    };
+                                    let mut play_args: Option<(String, String, String)> = None;
+                                    
+                                    if let Some(id) = find_epg_id(&app.data.channels[ch_idx], &app.data) && let Some(progs) = app.data.epg.get(&id) {
+                                        let now = Utc::now().timestamp();
+                                        let limit = now - (catchup_days as i64 * 86400);
+                                        let relevant: Vec<&EpgProgram> = progs.iter().filter(|p| p.stop > limit).collect();
+                                        
+                                        if let Some(p) = relevant.get(sel) {
+                                            let prog_title = format!("{} ({})", p.title, ch_name);
+                                            if p.stop < now {
+                                                if catchup_days > 0 {
+                                                    let ts_url = if url.contains("?") {
+                                                        format!("{}&utc={}&lutc={}", url, p.start, p.stop)
+                                                    } else {
+                                                        format!("{}?utc={}&lutc={}", url, p.start, p.stop)
+                                                    };
+                                                    play_args = Some((ts_url, prog_title, "⏪ Archive Playback".into()));
+                                                }
+                                            } else if p.start > now {
+                                                // Future - skip
+                                                continue;
+                                            } else {
+                                                play_args = Some((url.clone(), prog_title, "🔴 Live".into()));
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Fallback: Play live if no specific program selected or EPG missing
+                                    if play_args.is_none() {
+                                         play_args = Some((url.clone(), ch_name.clone(), "🔴 Live (No EPG)".into()));
+                                    }
+
+                                    if let Some((u, t, st)) = play_args {
+                                        app.run_mpv(&u, &t, &st, false);
+                                        app.config.history.retain(|x| x != &url);
+                                        app.config.history.insert(0, url);
+                                        app.config.history.truncate(20);
+                                        let _ = app.config.save();
+                                    }
+                                }
+                            }
                             KeyCode::Esc => app.screen = Screen::ChanList,
-                            _ => {} // Ignore other keys
+                            _ => {}
                         },
                         Screen::Settings => match key.code {
                             KeyCode::Up => {
