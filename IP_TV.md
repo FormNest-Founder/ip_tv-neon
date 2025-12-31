@@ -55,10 +55,22 @@
 - [x] Metadata integration for Radio Record.
 - [x] Cleanup of legacy Python/Fish scripts.
 - [x] **v0.7.0:** Removed TorrServer, added Local Scanner.
+- [x] **v0.7.1:** TimeShift (Archives) support via `tvg-rec`, EPG Sorting, Live Fallback.
 
 ## 📋 NEXT STEPS / IDEAS
+- [ ] Deep Search (Global program search).
 - [ ] Adaptive EPG refresh (auto-update every 24h).
 - [ ] Category filtering via hotkeys.
 
 ---
 *This file is the primary context for any Gemini session dealing with IPTV/Media Hub.*
+
+### Update 2025-12-30: Waybar Radio Volume Control
+- Добавлено управление громкостью MPV напрямую через Waybar.
+- Механика: Прокрутка колеса мыши ( / ) над модулем .
+- Команда: .
+
+### Update 2025-12-30: Waybar Radio Volume Control
+- Добавлено управление громкостью MPV напрямую через Waybar.
+- Механика: Прокрутка колеса мыши (on-scroll-up / on-scroll-down) над модулем custom/radio.
+- Команда: playerctl -p mpv volume 0.05+/-
