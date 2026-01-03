@@ -54,13 +54,13 @@
   - **EPG Parsing:** Streaming XML parser (`quick-xml`).
     - Extracts `start`, `stop`, `title`, `desc`.
     - **Filter:** Keeps programs from `now - 24h` to future (for Timeshift).
-  - **Cache:** Serializes `AppData` to `neon_cache/data.bin` using `bincode`.
+  - **Cache:** Serializes `AppData` to `~/.cache/neon-iptv/data.bin` using `bincode`.
 
 ### 5. `src/models.rs` (Data Structures)
 - **Role:** Defines the data types used throughout the app.
 - **Structs:**
   - `Config`: JSON-serializable settings.
-  - `Channel`: `name`, `group`, `url`, `tvg_id`.
+  - `Channel`: `name`, `group`, `url`, `tvg_id`, `logo`, `catchup_days`.
   - `RadioStation`: `title`, `stream`, `track` (current song).
   - `EpgProgram`: `start`, `stop`, `title`, `desc`.
   - `AppData`: The "database" holding all vectors and hashmaps.
@@ -69,6 +69,7 @@
 ### 6. `src/utils.rs` (Helpers)
 - **Role:** Utility functions.
 - **Functions:**
+  - `get_cache_dir()`: Returns absolute path to `~/.cache/neon-iptv/`.
   - `main_log(msg)`: Writes debug info to `/tmp/neon_iptv.log`.
   - `normalize(s)`: Strings -> alphanumeric lowercase (for fuzzy matching).
   - `parse_xml_time(s)`: Parses XMLTV timestamps (various formats).
