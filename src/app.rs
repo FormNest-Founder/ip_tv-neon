@@ -1,9 +1,9 @@
 use crate::models::{AppData, Config, Screen};
-use crate::utils::CACHE_DIR;
+use crate::utils::get_cache_dir;
 use ratatui::widgets::ListState;
 use regex::Regex;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 pub struct App {
@@ -15,9 +15,9 @@ pub struct App {
     pub ch_state: ListState,
     pub r_state: ListState,
     pub s_state: ListState,
-    pub l_state: ListState, // Local List State
+    pub l_state: ListState,
     pub r_cat_state: ListState,
-    pub d_state: ListState, // Detail State
+    pub d_state: ListState,
     pub filtered: Vec<usize>,
     pub search: String,
     pub _is_search: bool,
@@ -32,7 +32,8 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Self {
-        let data = File::open(Path::new(CACHE_DIR).join("data.bin"))
+        let cache_dir = get_cache_dir();
+        let data = File::open(cache_dir.join("data.bin"))
             .ok()
             .and_then(|f| bincode::deserialize_from(f).ok())
             .unwrap_or_default();
@@ -101,7 +102,6 @@ impl App {
                 .arg(format!("--geometry={}", self.config.video_geometry));
         }
 
-        // URL must be the LAST argument
         c.arg(url);
 
         #[cfg(unix)]

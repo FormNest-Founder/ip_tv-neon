@@ -7,11 +7,13 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::models::{AppData, Channel, Config, EpgProgram, RadioStation};
-use crate::utils::{main_log, normalize, parse_xml_time, CACHE_DIR, RADIO_API, RADIO_NOW_API, UA};
+use crate::utils::{
+    get_cache_dir, main_log, normalize, parse_xml_time, RADIO_API, RADIO_NOW_API, UA,
+};
 
 pub async fn update_data(config: &Config) -> Result<()> {
     main_log("Starting update_data...");
@@ -20,7 +22,6 @@ pub async fn update_data(config: &Config) -> Result<()> {
         .timeout(Duration::from_secs(15))
         .build()?;
 
-    // Fetch current tracks first
     let tracks_map = fetch_radio_now().await;
 
     main_log("Fetching Radio Record stations...");
@@ -30,16 +31,24 @@ pub async fn update_data(config: &Config) -> Result<()> {
 
     if let Ok(r) = client.get(RADIO_API).send().await {
         if let Ok(j) = r.json::<serde_json::Value>().await {
-            if let Some(st) = j["result"]["stations"].as_array() {
+            let stations = j["result"]["stations"]
+                .as_array()
+                .or_else(|| j["stations"].as_array());
+
+            if let Some(st) = stations {
                 for s in st {
                     let mut genres = Vec::new();
                     if let Some(gs) = s["genre"].as_array() {
                         for g in gs {
-                            if let Some(name) = g["name"].as_str() {
-                                let g_name = name.to_uppercase();
-                                genres.push(g_name.clone());
-                                radio_genres.insert(g_name);
-                            }
+                            let g_name = if let Some(name) = g["name"].as_str() {
+                                name.to_uppercase()
+                            } else if let Some(name) = g.as_str() {
+                                name.to_uppercase()
+                            } else {
+                                continue;
+                            };
+                            genres.push(g_name.clone());
+                            radio_genres.insert(g_name);
                         }
                     }
                     if genres.is_empty() {
@@ -171,13 +180,18 @@ pub async fn update_data(config: &Config) -> Result<()> {
     let mut channels = Vec::new();
     let mut groups = HashSet::new();
     let mut cur_grp = "Other".to_string();
-    let re_id = Regex::new(r#"#EXTINF:.*tvg-id="([^"]+)""#).unwrap();
-    let re_name = Regex::new(r#"#EXTINF:.*tvg-name="([^"]+)""#).unwrap();
+    let re_id = Regex::new(r#"tvg-id="([^"]+)""#).unwrap();
+    let re_name = Regex::new(r#"tvg-name="([^"]+)""#).unwrap();
+    let re_group = Regex::new(r#"group-title="([^"]+)""#).unwrap();
 
     for line in m3u.lines() {
         if line.starts_with("#EXTINF:") {
             let tid = re_id.captures(line).map(|c| c[1].to_string());
             let tname = re_name.captures(line).map(|c| c[1].to_string());
+            if let Some(g) = re_group.captures(line).map(|c| c[1].to_string()) {
+                cur_grp = g;
+                groups.insert(cur_grp.clone());
+            }
             let name = line.split(',').next_back().unwrap_or("").trim().to_string();
             channels.push(Channel {
                 name,
@@ -204,11 +218,12 @@ pub async fn update_data(config: &Config) -> Result<()> {
 
     if let Ok(r) = client.get(&config.epg_url).send().await {
         let b = r.bytes().await?;
-        let reader_raw: Box<dyn BufRead> = if config.epg_url.ends_with(".gz") {
-            Box::new(BufReader::new(GzDecoder::new(&b[..])))
-        } else {
-            Box::new(BufReader::new(&b[..]))
-        };
+        let reader_raw: Box<dyn BufRead> =
+            if config.epg_url.ends_with(".gz") || b.starts_with(&[0x1f, 0x8b]) {
+                Box::new(BufReader::new(GzDecoder::new(&b[..])))
+            } else {
+                Box::new(BufReader::new(&b[..]))
+            };
         let mut reader = Reader::from_reader(reader_raw);
         reader.trim_text(true);
         let mut buf = Vec::new();
@@ -216,38 +231,52 @@ pub async fn update_data(config: &Config) -> Result<()> {
         let mut cur_prog: Option<EpgProgram> = None;
         let mut tag = String::new();
         let now = Utc::now().timestamp();
-        
+
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(XmlEvent::Start(e)) => {
                     tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     if tag == "channel" {
-                        if let Some(a) = e.attributes().flatten().find(|a| a.key.as_ref() == b"id") {
+                        if let Some(a) = e.attributes().flatten().find(|a| a.key.as_ref() == b"id")
+                        {
                             cur_id = String::from_utf8_lossy(&a.value).into();
                         }
                     } else if tag == "programme" {
                         let (mut start, mut stop, mut cid) = (0, 0, String::new());
                         for a in e.attributes().flatten() {
                             match a.key.as_ref() {
-                                b"start" => start = parse_xml_time(&String::from_utf8_lossy(&a.value)),
-                                b"stop" => stop = parse_xml_time(&String::from_utf8_lossy(&a.value)),
+                                b"start" => {
+                                    start = parse_xml_time(&String::from_utf8_lossy(&a.value))
+                                }
+                                b"stop" => {
+                                    stop = parse_xml_time(&String::from_utf8_lossy(&a.value))
+                                }
                                 b"channel" => cid = String::from_utf8_lossy(&a.value).into(),
                                 _ => {}
                             }
                         }
-                        // Keep programs from the last 24 hours to allow timeshift
                         if stop > now - 86400 {
-                            cur_prog = Some(EpgProgram { start, stop, title: "".into(), desc: "".into() });
+                            cur_prog = Some(EpgProgram {
+                                start,
+                                stop,
+                                title: "".into(),
+                                desc: "".into(),
+                            });
                             cur_id = cid;
                         }
                     }
                 }
                 Ok(XmlEvent::Text(e)) => {
                     let text = e.unescape().unwrap_or_default().into_owned();
-                    if tag == "display-name" { name_to_id.insert(normalize(&text), cur_id.clone()); }
+                    if tag == "display-name" {
+                        name_to_id.insert(normalize(&text), cur_id.clone());
+                    }
                     if let Some(p) = cur_prog.as_mut() {
-                        if tag == "title" { p.title = text; }
-                        else if tag == "desc" { p.desc = text; }
+                        if tag == "title" {
+                            p.title = text;
+                        } else if tag == "desc" {
+                            p.desc = text;
+                        }
                     }
                 }
                 Ok(XmlEvent::End(e)) => {
@@ -265,7 +294,7 @@ pub async fn update_data(config: &Config) -> Result<()> {
         }
     }
     main_log(&format!("EPG Parsed: {} programs loaded.", prog_count));
-    
+
     let mut g_vec: Vec<String> = groups.into_iter().collect();
     g_vec.sort();
     let data = AppData {
@@ -276,8 +305,9 @@ pub async fn update_data(config: &Config) -> Result<()> {
         epg,
         name_to_id,
     };
-    let _ = fs::create_dir_all(CACHE_DIR);
-    bincode::serialize_into(File::create(Path::new(CACHE_DIR).join("data.bin"))?, &data)?;
+    let cache_dir = get_cache_dir();
+    let _ = fs::create_dir_all(&cache_dir);
+    bincode::serialize_into(File::create(cache_dir.join("data.bin"))?, &data)?;
     main_log("update_data finished.");
     Ok(())
 }
@@ -287,7 +317,8 @@ pub async fn fetch_radio_now() -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Ok(r) = client.get(RADIO_NOW_API).send().await {
         if let Ok(j) = r.json::<serde_json::Value>().await {
-            if let Some(res) = j["result"].as_array() {
+            let res_arr = j["result"].as_array().or_else(|| j.as_array());
+            if let Some(res) = res_arr {
                 for st in res {
                     let id = st["id"].as_i64().unwrap_or(0).to_string();
                     let artist = st["track"]["artist"].as_str().unwrap_or("");
@@ -320,18 +351,21 @@ pub fn get_current_epg<'a>(ch: &Channel, data: &'a AppData, now: i64) -> Option<
 
 pub fn scan_local_playlists() -> Vec<PathBuf> {
     let mut files = Vec::new();
-    let mut dirs_to_scan = vec![dirs::download_dir(), dirs::video_dir(), Some(PathBuf::from("/mnt")), Some(PathBuf::from("/media"))];
-    
-    for dir_opt in dirs_to_scan {
-        if let Some(dir) = dir_opt {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                            if ext.eq_ignore_ascii_case("m3u") || ext.eq_ignore_ascii_case("m3u8") {
-                                files.push(path);
-                            }
+    let dirs_to_scan = vec![
+        dirs::download_dir(),
+        dirs::video_dir(),
+        Some(PathBuf::from("/mnt")),
+        Some(PathBuf::from("/media")),
+    ];
+
+    for dir in dirs_to_scan.into_iter().flatten() {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        if ext.eq_ignore_ascii_case("m3u") || ext.eq_ignore_ascii_case("m3u8") {
+                            files.push(path);
                         }
                     }
                 }

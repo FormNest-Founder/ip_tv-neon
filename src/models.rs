@@ -42,17 +42,14 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Self {
-        let p = dirs::config_dir()
+        let d = dirs::config_dir()
             .unwrap_or_else(|| ".".into())
-            .join("neon-iptv/config.json");
-        let mut cfg: Config = fs::read_to_string(&p)
+            .join("neon-iptv");
+        let p = d.join("config.json");
+        let cfg: Config = fs::read_to_string(&p)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        if cfg.epg_url.contains("it999.ru") {
-            cfg.epg_url = RECOMMENDED_EPG.into();
-            let _ = cfg.save();
-        }
         cfg
     }
     pub fn save(&self) -> Result<()> {
@@ -104,9 +101,7 @@ pub struct AppData {
     pub name_to_id: HashMap<String, String>,
 }
 
-#[derive(PartialEq)]
-#[allow(dead_code)]
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub enum Screen {
     MainMenu,
     CatList,
