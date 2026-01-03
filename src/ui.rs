@@ -30,7 +30,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let chunks = Layout::default()
                 .constraints([Constraint::Length(10), Constraint::Min(0)])
                 .split(area);
-            let status_text = format!("   NEON HUB\n   V 0.8.0\n   Channels: {}\n   Radio: {}", app.data.channels.len(), app.data.radio.len());
+            let status_text = format!("   NEON HUB\n   V 0.8.1-HOTFIX\n   Channels: {}\n   Radio: {}", app.data.channels.len(), app.data.radio.len());
             
             f.render_widget(
                 Paragraph::new(status_text)

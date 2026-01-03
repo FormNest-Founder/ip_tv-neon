@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
                         app.in_buf.push_str(&text);
                     }
                 }
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                Event::Key(key) => {
                     match app.screen {
                         Screen::Updating => {}
                         Screen::MainMenu => match key.code {
@@ -460,6 +460,95 @@ async fn main() -> Result<()> {
                                 }
                             }
                             KeyCode::Esc => app.screen = Screen::RadioCatList,
+                            _ => {}
+                        },
+                        Screen::LocalList => match key.code {
+                            KeyCode::Up => {
+                                let i = app.l_state.selected().unwrap_or(0);
+                                let l = app.local_files.len();
+                                if l > 0 {
+                                    app.l_state.select(Some(if i == 0 { l - 1 } else { i - 1 }));
+                                }
+                            }
+                            KeyCode::Down => {
+                                let i = app.l_state.selected().unwrap_or(0);
+                                let l = app.local_files.len();
+                                if l > 0 {
+                                    app.l_state.select(Some(if i == l - 1 { 0 } else { i + 1 }));
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(i) = app.l_state.selected() {
+                                    if let Some(path) = app.local_files.get(i) {
+                                        app.config.playlist_url = path.to_string_lossy().into();
+                                        let _ = app.config.save();
+                                        app.screen = Screen::Updating;
+                                        terminal.draw(|f| ui(f, &mut app))?;
+                                        if update_data(&app.config).await.is_ok() {
+                                            app = App::new(Config::load());
+                                        }
+                                        app.screen = Screen::MainMenu;
+                                    }
+                                }
+                            }
+                            KeyCode::Esc => app.screen = Screen::MainMenu,
+                            _ => {}
+                        },
+                        Screen::LinkInput => match key.code {
+                            KeyCode::Enter => {
+                                let url = app.in_buf.clone();
+                                if !url.is_empty() {
+                                    app.run_mpv(&url, "LINK", "", false);
+                                    app.quit = true;
+                                }
+                            }
+                            KeyCode::Esc => app.screen = Screen::MainMenu,
+                            KeyCode::Char(c) => { app.in_buf.push(c); }
+                            KeyCode::Backspace => { app.in_buf.pop(); }
+                            _ => {}
+                        },
+                        Screen::Settings => match key.code {
+                            KeyCode::Up => {
+                                let i = app.s_state.selected().unwrap_or(0);
+                                app.s_state.select(Some(if i == 0 { 2 } else { i - 1 }));
+                            }
+                            KeyCode::Down => {
+                                let i = app.s_state.selected().unwrap_or(0);
+                                app.s_state.select(Some(if i == 2 { 0 } else { i + 1 }));
+                            }
+                            KeyCode::Enter => match app.s_state.selected().unwrap_or(0) {
+                                0 => {
+                                    app.in_buf = app.config.playlist_url.clone();
+                                    app.in_tgt = "Playlist URL".into();
+                                    app.screen = Screen::Input;
+                                }
+                                1 => {
+                                    app.in_buf = app.config.epg_url.clone();
+                                    app.in_tgt = "EPG URL".into();
+                                    app.screen = Screen::Input;
+                                }
+                                2 => {
+                                    let _ = app.config.save();
+                                    app.screen = Screen::MainMenu;
+                                }
+                                _ => {}
+                            },
+                            KeyCode::Esc => app.screen = Screen::MainMenu,
+                            _ => {}
+                        },
+                        Screen::Input => match key.code {
+                            KeyCode::Enter => {
+                                let val = app.in_buf.clone();
+                                if app.in_tgt == "Playlist URL" {
+                                    app.config.playlist_url = val;
+                                } else if app.in_tgt == "EPG URL" {
+                                    app.config.epg_url = val;
+                                }
+                                app.screen = Screen::Settings;
+                            }
+                            KeyCode::Esc => app.screen = Screen::Settings,
+                            KeyCode::Char(c) => { app.in_buf.push(c); }
+                            KeyCode::Backspace => { app.in_buf.pop(); }
                             _ => {}
                         },
                         _ => {}

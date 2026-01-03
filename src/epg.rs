@@ -320,13 +320,19 @@ pub fn get_current_epg<'a>(ch: &Channel, data: &'a AppData, now: i64) -> Option<
 
 pub fn scan_local_playlists() -> Vec<PathBuf> {
     let mut files = Vec::new();
-    if let Some(dir) = dirs::download_dir() {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext.eq_ignore_ascii_case("m3u") || ext.eq_ignore_ascii_case("m3u8") {
-                        files.push(path);
+    let mut dirs_to_scan = vec![dirs::download_dir(), dirs::video_dir(), Some(PathBuf::from("/mnt")), Some(PathBuf::from("/media"))];
+    
+    for dir_opt in dirs_to_scan {
+        if let Some(dir) = dir_opt {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                            if ext.eq_ignore_ascii_case("m3u") || ext.eq_ignore_ascii_case("m3u8") {
+                                files.push(path);
+                            }
+                        }
                     }
                 }
             }

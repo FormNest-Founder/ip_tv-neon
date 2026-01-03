@@ -106,6 +106,7 @@ pub struct AppData {
 
 #[derive(PartialEq)]
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum Screen {
     MainMenu,
     CatList,
