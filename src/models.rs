@@ -1,4 +1,4 @@
-use crate::utils::RECOMMENDED_EPG;
+use crate::consts::*;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -42,10 +42,7 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Self {
-        let d = dirs::config_dir()
-            .unwrap_or_else(|| ".".into())
-            .join("neon-iptv");
-        let p = d.join("config.json");
+        let p = get_config_json_path();
         let cfg: Config = fs::read_to_string(&p)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
@@ -53,11 +50,9 @@ impl Config {
         cfg
     }
     pub fn save(&self) -> Result<()> {
-        let d = dirs::config_dir()
-            .unwrap_or_else(|| ".".into())
-            .join("neon-iptv");
+        let d = get_config_dir();
         let _ = fs::create_dir_all(&d);
-        fs::write(d.join("config.json"), serde_json::to_string_pretty(self)?).unwrap();
+        fs::write(get_config_json_path(), serde_json::to_string_pretty(self)?).unwrap();
         Ok(())
     }
 }
@@ -101,7 +96,13 @@ pub struct AppData {
     pub name_to_id: HashMap<String, String>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Serialize, Deserialize)]
+pub struct CacheContainer {
+    pub version: u32,
+    pub data: AppData,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum Screen {
     MainMenu,
     CatList,
@@ -114,4 +115,6 @@ pub enum Screen {
     Updating,
     LocalList,
     LinkInput,
+    Favorites,
+    History,
 }
