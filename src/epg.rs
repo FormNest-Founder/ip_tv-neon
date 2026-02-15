@@ -1,6 +1,6 @@
+use crate::consts::*;
 use crate::models::{AppData, CacheContainer, Channel, Config, EpgProgram, RadioStation};
 use crate::utils::{main_log, normalize, parse_xml_time};
-use crate::consts::*;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use flate2::read::GzDecoder;
@@ -17,6 +17,7 @@ use std::time::Duration;
 static RE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-id="([^"]+)""#).unwrap());
 static RE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-name="([^"]+)""#).unwrap());
 static RE_GROUP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"group-title="([^"]+)""#).unwrap());
+static RE_REC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-rec="(\d+)""#).unwrap());
 
 pub async fn update_data(config: &Config) -> Result<()> {
     main_log("Starting update_data...");
@@ -68,51 +69,68 @@ pub async fn update_data(config: &Config) -> Result<()> {
         fs::read_to_string(&config.playlist_url).context("Failed to read local playlist")?
     };
 
-    let mut channels = Vec::new();
-    let mut groups = HashSet::new();
+    let mut channels: Vec<Channel> = Vec::new();
     let mut cur_grp = "Other".to_string();
     let mut pending_grp: Option<String> = None;
+
+    // NIGHT CITY BLOCKLIST (Case-insensitive fragments, Latin + Cyrillic)
+    let blocklist = [
+        "ARMENIA", "АРМЕНИ", "AZERBAIJAN", "AZƏRBAYCAN", "АЗЕРБАЙДЖАН",
+        "GEORGIA", "ГРУЗИ", "KAZAKHSTAN", "КАЗАХСТАН", "ҚАЗАҚСТАН",
+        "UZBEKISTAN", "УЗБЕКИСТАН", "O'ZBEK", "MOLDOVA", "МОЛДАВ",
+        "LATVIA", "ЛАТВИ", "ESTONIA", "ЭСТОНИ", "LITHUANIA", "ЛИТВ",
+        "ISRAEL", "ИЗРАИЛЬ", "TURKEY", "TÜRK", "ТУРЦИ",
+        "UKRAINE", "УКРАИН", "УКРАЇНСЬК", "BELARUS", "БЕЛАРУС",
+    ];
 
     for line in m3u.lines() {
         let line = line.trim();
         if line.starts_with("#EXTGRP:") {
-            // Format: #EXTGRP:GroupName (separate line before URL)
             let g = line.trim_start_matches("#EXTGRP:").trim().to_string();
             if !g.is_empty() {
+                // EXTGRP can appear before or after EXTINF — apply to last channel if pending
+                if let Some(ch) = channels.last_mut() {
+                    if ch.url.is_empty() {
+                        // Channel was just added by EXTINF but has no URL yet — update its group
+                        ch.group = g.clone();
+                        cur_grp = g;
+                        continue;
+                    }
+                }
                 pending_grp = Some(g);
             }
         } else if line.starts_with("#EXTINF:") {
+            if let Some(g) = RE_GROUP.captures(line).map(|c| c[1].to_string()) { cur_grp = g; }
+            if let Some(g) = pending_grp.take() { cur_grp = g; }
+
             let tid = RE_ID.captures(line).map(|c| c[1].to_string());
             let tname = RE_NAME.captures(line).map(|c| c[1].to_string());
-            // group-title="..." inside #EXTINF (standard format)
-            if let Some(g) = RE_GROUP.captures(line).map(|c| c[1].to_string()) {
-                cur_grp = g;
-                groups.insert(cur_grp.clone());
-            }
-            // #EXTGRP on previous line overrides
-            if let Some(g) = pending_grp.take() {
-                cur_grp = g;
-                groups.insert(cur_grp.clone());
-            }
+            let rec_days = RE_REC.captures(line).and_then(|c| c[1].parse().ok()).unwrap_or(0);
             let name = line.rsplit(",").next().unwrap_or("").trim().to_string();
             channels.push(Channel {
-                name: name.clone(),
+                name,
                 group: cur_grp.clone(),
                 url: "".into(),
                 tvg_id: tid.or(tname),
-                norm_name: normalize(&name),
-                catchup_days: 0,
+                norm_name: normalize(""),
+                catchup_days: rec_days,
             });
         } else if line.starts_with("http") {
-            // #EXTGRP can also appear between #EXTINF and URL
-            if let Some(g) = pending_grp.take() {
-                cur_grp = g.clone();
-                groups.insert(cur_grp.clone());
-                if let Some(ch) = channels.last_mut() { ch.group = cur_grp.clone(); }
+            if let Some(ch) = channels.last_mut() {
+                ch.url = line.to_string();
+                ch.norm_name = normalize(&ch.name);
             }
-            if let Some(ch) = channels.last_mut() { ch.url = line.to_string(); }
         }
     }
+
+    // Apply blocklist and remove empty
+    channels.retain(|ch| {
+        if ch.url.is_empty() { return false; }
+        let up_grp = ch.group.to_uppercase();
+        !blocklist.iter().any(|&b| up_grp.contains(b))
+    });
+
+    let groups: HashSet<String> = channels.iter().map(|ch| ch.group.clone()).collect();
 
     let mut epg: HashMap<String, Vec<EpgProgram>> = HashMap::new();
     let mut name_to_id: HashMap<String, String> = HashMap::new();

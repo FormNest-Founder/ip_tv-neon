@@ -1,11 +1,12 @@
 use crate::app::App;
 use crate::epg::get_current_epg;
-use crate::models::{Screen, Channel};
+use crate::models::{Channel, Screen, SETTINGS_COUNT, SETTINGS_LABELS};
 use chrono::Utc;
 use ratatui::{prelude::*, widgets::*};
 
 pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel]) -> &'a str {
-    channels.iter()
+    channels
+        .iter()
         .find(|ch| ch.url == url)
         .map(|ch| ch.name.as_str())
         .unwrap_or(url)
@@ -13,131 +14,521 @@ pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel]) -> &'a str {
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     let size = f.size();
-    let theme_fg = Color::Rgb(app.config.theme_color.0, app.config.theme_color.1, app.config.theme_color.2);
-    let block = Block::default().borders(Borders::ALL).title(" NIGHT CITY HUB ").border_style(Style::default().fg(theme_fg));
+    let (r, g, b) = app.config.theme_color;
+    let theme = Color::Rgb(r, g, b);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" NIGHT CITY HUB ")
+        .border_style(Style::default().fg(theme));
     f.render_widget(block.clone(), size);
     let area = block.inner(size);
-    match app.screen {
-        Screen::Updating => {
-            f.render_widget(Paragraph::new("
 
-🚀 UPDATING DATA...
-PLEASE WAIT...").alignment(Alignment::Center).fg(Color::Yellow).bold(), area);
+    // Show "Now Playing" overlay while MPV is running
+    if app.mpv_handle.is_some() {
+        let text = "\n\n\n  ▶  NOW PLAYING\n\n  Press Q in MPV to return";
+        f.render_widget(
+            Paragraph::new(text)
+                .alignment(Alignment::Center)
+                .fg(theme)
+                .bold(),
+            area,
+        );
+        return;
+    }
+
+    match &app.screen {
+        Screen::Updating => {
+            let text = "\n\n  UPDATING DATA...\n  PLEASE WAIT...";
+            f.render_widget(
+                Paragraph::new(text)
+                    .alignment(Alignment::Center)
+                    .fg(Color::Yellow)
+                    .bold(),
+                area,
+            );
         }
+
         Screen::MainMenu => {
-            let chunks = Layout::default().constraints([Constraint::Length(10), Constraint::Min(0)]).split(area);
+            let chunks =
+                Layout::default()
+                    .constraints([Constraint::Length(10), Constraint::Min(0)])
+                    .split(area);
             let version = env!("CARGO_PKG_VERSION");
-            let status_text = format!("   NEON HUB
-   V {}
-   Channels: {}
-   Radio: {}", version, app.data.channels.len(), app.data.radio.len());
-            f.render_widget(Paragraph::new(status_text).alignment(Alignment::Center).fg(Color::Cyan), chunks[0]);
-            let items = ["📺 IPTV", "📻 RADIO", "📂 LOCAL", "🔗 PLAY LINK", "⭐ FAVORITES", "🕒 HISTORY", "⏹ STOP ALL", "🔄 UPDATE", "⚙️ SETTINGS", "🚪 EXIT"];
-            let list = List::new(items.iter().map(|i| ListItem::new(*i)).collect::<Vec<_>>()).highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
+            let status = format!(
+                "   NEON HUB v{}\n   Channels: {}  Radio: {}",
+                version,
+                app.data.channels.len(),
+                app.data.radio.len()
+            );
+            f.render_widget(
+                Paragraph::new(status).alignment(Alignment::Center).fg(theme),
+                chunks[0],
+            );
+            let items = [
+                "  IPTV", "  RADIO", "  LOCAL", "  PLAY LINK", "  FAVORITES",
+                "  HISTORY", "  STOP ALL", "  UPDATE", "  SETTINGS", "  EXIT",
+            ];
+            let list = List::new(items.map(ListItem::new))
+                .highlight_style(Style::default().bg(theme).fg(Color::Black));
             f.render_stateful_widget(list, chunks[1], &mut app.m_state);
         }
+
         Screen::CatList => {
-            let items: Vec<ListItem> = app.data.groups.iter().map(|g| {
-                let count = app.data.channels.iter().filter(|ch| ch.group == *g).count();
-                ListItem::new(format!("📂 {} ({})", g, count))
-            }).collect();
+            let items: Vec<ListItem> = app
+                .data
+                .groups
+                .iter()
+                .map(|g| {
+                    let cnt = app.data.channels.iter().filter(|ch| ch.group == *g).count();
+                    ListItem::new(format!("  {} ({})", g, cnt))
+                })
+                .collect();
             let list = List::new(items)
                 .block(Block::default().title(" Categories ").borders(Borders::ALL))
-                .highlight_style(Style::default().bg(Color::Rgb(40, 0, 40)).fg(Color::Magenta).add_modifier(Modifier::BOLD));
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Rgb(40, 0, 40))
+                        .fg(Color::Magenta)
+                        .bold(),
+                );
             f.render_stateful_widget(list, area, &mut app.cat_state);
         }
+
         Screen::ChanList => {
-            let chunks = Layout::default().constraints([Constraint::Min(0), Constraint::Length(3)]).split(area);
+            let chunks =
+                Layout::default()
+                    .constraints([Constraint::Min(0), Constraint::Length(3)])
+                    .split(area);
             let now = Utc::now().timestamp();
-            let items: Vec<ListItem> = app.filtered.iter().map(|&idx| {
-                let ch = &app.data.channels[idx];
-                let mut spans = vec![Span::styled(app.clean_name(&ch.name), Style::default().fg(Color::White))];
-                if let Some(p) = get_current_epg(ch, &app.data, now) {
-                    let pct = if p.stop > p.start { ((now - p.start) as f64 / (p.stop - p.start) as f64).clamp(0.0, 1.0) } else { 0.0 };
-                    let bar: String = (0..10).map(|i| if i < (pct * 10.0) as usize { "█" } else { "░" }).collect();
-                    spans.push(Span::styled(format!(" │ {} 🔴 {} ", bar, p.title), Style::default().fg(Color::Magenta)));
-                }
-                ListItem::new(Line::from(spans))
-            }).collect();
+            let items: Vec<ListItem> = app
+                .filtered
+                .iter()
+                .map(|&idx| {
+                    let ch = &app.data.channels[idx];
+                    let is_fav = app.config.favorites.contains(&ch.url);
+                    let has_archive = ch.catchup_days > 0;
+
+                    let mut spans: Vec<Span> = Vec::new();
+
+                    // Markers: fav + archive
+                    if is_fav {
+                        spans.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
+                    }
+                    if has_archive {
+                        spans.push(Span::styled("⏪", Style::default().fg(Color::Rgb(100, 140, 255))));
+                    }
+                    if !is_fav && !has_archive {
+                        spans.push(Span::raw("  "));
+                    }
+
+                    // Channel name
+                    spans.push(Span::styled(
+                        app.clean_name(&ch.name),
+                        Style::default().fg(Color::White),
+                    ));
+
+                    // EPG: progress bar + title
+                    if let Some(p) = get_current_epg(ch, &app.data, now) {
+                        let pct = if p.stop > p.start {
+                            ((now - p.start) as f64 / (p.stop - p.start) as f64).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        let filled = (pct * 12.0) as usize;
+                        let bar: String = (0..12)
+                            .map(|i| if i < filled { '▰' } else { '▱' })
+                            .collect();
+                        let bar_color = if pct < 0.3 {
+                            Color::Rgb(0, 200, 120)
+                        } else if pct < 0.7 {
+                            Color::Rgb(200, 200, 0)
+                        } else {
+                            Color::Rgb(255, 100, 60)
+                        };
+                        spans.push(Span::styled(
+                            format!("  {}", bar),
+                            Style::default().fg(bar_color),
+                        ));
+                        spans.push(Span::styled(
+                            format!(" {}", p.title),
+                            Style::default().fg(Color::Rgb(180, 140, 255)),
+                        ));
+                    }
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
             let title = format!(" {} ({}) ", app.selected_group, app.filtered.len());
-            f.render_stateful_widget(List::new(items).block(Block::default().title(title).borders(Borders::ALL)).highlight_style(Style::default().bg(Color::Rgb(0, 40, 40)).fg(Color::Cyan).add_modifier(Modifier::BOLD)), chunks[0], &mut app.ch_state);
-            f.render_widget(Paragraph::new(format!(" SEARCH: {}", app.search)).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow))), chunks[1]);
-        }
-        Screen::RadioCatList => {
-            let items: Vec<ListItem> = app.data.radio_groups.iter().map(|g| {
-                let count = if g == "All" {
-                    app.data.radio.len()
-                } else {
-                    app.data.radio.iter().filter(|r| r.genres.contains(g)).count()
-                };
-                ListItem::new(format!("🎵 {} ({})", g, count))
-            }).collect();
-            let list = List::new(items)
-                .block(Block::default().title(" Radio Genres ").borders(Borders::ALL))
-                .highlight_style(Style::default().bg(Color::Rgb(40, 0, 40)).fg(Color::Magenta).add_modifier(Modifier::BOLD));
-            f.render_stateful_widget(list, area, &mut app.r_cat_state);
-        }
-        Screen::RadioList => {
-            let items: Vec<ListItem> = app.filtered_radio.iter().map(|&idx| {
-                let st = &app.data.radio[idx];
-                let track_info = st.track.as_deref().unwrap_or("");
-                let mut spans = vec![Span::styled(&st.title, Style::default().fg(Color::White))];
-                if !track_info.is_empty() {
-                    spans.push(Span::styled(format!(" │ 🎶 {}", track_info), Style::default().fg(Color::Green)));
-                }
-                ListItem::new(Line::from(spans))
-            }).collect();
-            let title = format!(" Radio: {} ({}) ", app.selected_radio_genre, app.filtered_radio.len());
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
-                .highlight_style(Style::default().bg(Color::Rgb(0, 30, 0)).fg(Color::Green).add_modifier(Modifier::BOLD));
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Rgb(0, 40, 40))
+                        .fg(Color::Cyan)
+                        .bold(),
+                );
+            f.render_stateful_widget(list, chunks[0], &mut app.ch_state);
+            f.render_widget(
+                Paragraph::new(format!(" SEARCH: {}", app.search)).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow)),
+                ),
+                chunks[1],
+            );
+        }
+
+        Screen::RadioCatList => {
+            let items: Vec<ListItem> = app
+                .data
+                .radio_groups
+                .iter()
+                .map(|g| {
+                    let cnt = if g == "All" {
+                        app.data.radio.len()
+                    } else {
+                        app.data.radio.iter().filter(|r| r.genres.contains(g)).count()
+                    };
+                    ListItem::new(format!("  {} ({})", g, cnt))
+                })
+                .collect();
+            let list = List::new(items)
+                .block(Block::default().title(" Radio Genres ").borders(Borders::ALL))
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Rgb(40, 0, 40))
+                        .fg(Color::Magenta)
+                        .bold(),
+                );
+            f.render_stateful_widget(list, area, &mut app.r_cat_state);
+        }
+
+        Screen::RadioList => {
+            let items: Vec<ListItem> = app
+                .filtered_radio
+                .iter()
+                .map(|&idx| {
+                    let st = &app.data.radio[idx];
+                    let track = st.track.as_deref().unwrap_or("");
+                    let mut spans =
+                        vec![Span::styled(&st.title, Style::default().fg(Color::White))];
+                    if !track.is_empty() {
+                        spans.push(Span::styled(
+                            format!("  {}", track),
+                            Style::default().fg(Color::Green),
+                        ));
+                    }
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
+            let title = format!(
+                " Radio: {} ({}) ",
+                app.selected_radio_genre,
+                app.filtered_radio.len()
+            );
+            let list = List::new(items)
+                .block(Block::default().title(title).borders(Borders::ALL))
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Rgb(0, 30, 0))
+                        .fg(Color::Green)
+                        .bold(),
+                );
             f.render_stateful_widget(list, area, &mut app.r_state);
         }
+
         Screen::Favorites => {
             let mut favs: Vec<_> = app.config.favorites.iter().collect();
             favs.sort();
-            let items: Vec<ListItem> = favs.iter().map(|url| {
-                let name = get_name_by_url(url, &app.data.channels);
-                ListItem::new(format!("⭐ {}", app.clean_name(name)))
-            }).collect();
+            let items: Vec<ListItem> = favs
+                .iter()
+                .map(|url| {
+                    let name = get_name_by_url(url, &app.data.channels);
+                    ListItem::new(format!("  {}", app.clean_name(name)))
+                })
+                .collect();
             let list = List::new(items)
                 .block(Block::default().title(" Favorites ").borders(Borders::ALL))
-                .highlight_style(Style::default().bg(Color::Rgb(40, 40, 0)).fg(Color::Yellow).add_modifier(Modifier::BOLD));
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Rgb(40, 40, 0))
+                        .fg(Color::Yellow)
+                        .bold(),
+                );
             f.render_stateful_widget(list, area, &mut app.fav_state);
         }
+
         Screen::History => {
-            let items: Vec<ListItem> = app.config.history.iter().rev().map(|url| {
-                let name = get_name_by_url(url, &app.data.channels);
-                ListItem::new(format!("🕒 {}", app.clean_name(name)))
-            }).collect();
+            let items: Vec<ListItem> = app
+                .config
+                .history
+                .iter()
+                .rev()
+                .map(|url| {
+                    let name = get_name_by_url(url, &app.data.channels);
+                    ListItem::new(format!("  {}", app.clean_name(name)))
+                })
+                .collect();
             let list = List::new(items)
                 .block(Block::default().title(" History ").borders(Borders::ALL))
-                .highlight_style(Style::default().bg(Color::Rgb(0, 0, 40)).fg(Color::Blue).add_modifier(Modifier::BOLD));
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Rgb(0, 0, 40))
+                        .fg(Color::Blue)
+                        .bold(),
+                );
             f.render_stateful_widget(list, area, &mut app.hist_state);
         }
-        Screen::Settings => {
-            let text = format!("Playlist URL: {}
-EPG URL: {}
-Fullscreen: {}
-Geometry: {}
 
-Press ESC to return", 
-                app.config.playlist_url, app.config.epg_url, app.config.video_fullscreen, app.config.video_geometry);
-            f.render_widget(Paragraph::new(text).block(Block::default().title(" Settings ").borders(Borders::ALL)), area);
+        Screen::Settings => {
+            render_settings(f, app, area, None);
         }
+
+        Screen::SettingsEdit(field) => {
+            render_settings(f, app, area, Some(*field));
+        }
+
         Screen::LocalList => {
-            let items: Vec<ListItem> = app.local_files.iter().map(|p| ListItem::new(p.to_string_lossy().to_string())).collect();
+            let items: Vec<ListItem> = app
+                .local_files
+                .iter()
+                .map(|p| ListItem::new(p.to_string_lossy().to_string()))
+                .collect();
             let list = List::new(items)
                 .block(Block::default().title(" Local Playlists ").borders(Borders::ALL))
                 .highlight_style(Style::default().bg(Color::White).fg(Color::Black));
             f.render_stateful_widget(list, area, &mut app.d_state);
         }
-        Screen::LinkInput => {
-            f.render_widget(Paragraph::new("
 
-Custom Link Input not yet implemented.
-Press ESC to return.").alignment(Alignment::Center), area);
+        Screen::Detail => {
+            render_detail(f, app, area);
         }
-        _ => { f.render_widget(Paragraph::new("View not implemented").alignment(Alignment::Center), area); }
+
+        Screen::LinkInput => {
+            f.render_widget(
+                Paragraph::new("\n\n  Not yet implemented.\n  Press ESC to return.")
+                    .alignment(Alignment::Center),
+                area,
+            );
+        }
     }
+}
+
+fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
+    let ch_idx = match app.detail_channel {
+        Some(i) => i,
+        None => return,
+    };
+    let ch = &app.data.channels[ch_idx];
+    let now = Utc::now().timestamp();
+    let (r, g, b) = app.config.theme_color;
+    let theme = Color::Rgb(r, g, b);
+    let is_fav = app.config.favorites.contains(&ch.url);
+
+    // Layout: header (4 lines) | EPG list | description (5 lines) | hint bar
+    let chunks = Layout::default()
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(5),
+            Constraint::Length(6),
+            Constraint::Length(3),
+        ])
+        .split(area);
+
+    // Header: channel name + info
+    let fav_marker = if is_fav { " ★" } else { "" };
+    let archive_info = if ch.catchup_days > 0 {
+        format!("  Archive: {} days", ch.catchup_days)
+    } else {
+        String::new()
+    };
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(
+                format!(" {}{}", app.clean_name(&ch.name), fav_marker),
+                Style::default().fg(theme).bold(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!(" {}{}", ch.group, archive_info),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    ])
+    .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray)));
+    f.render_widget(header, chunks[0]);
+
+    // EPG program list
+    if app.detail_programs.is_empty() {
+        f.render_widget(
+            Paragraph::new("  No EPG data available")
+                .fg(Color::DarkGray)
+                .block(Block::default().title(" Programs ").borders(Borders::ALL)),
+            chunks[1],
+        );
+    } else {
+        let items: Vec<ListItem> = app
+            .detail_programs
+            .iter()
+            .map(|p| {
+                let is_current = now >= p.start && now < p.stop;
+                let is_past = p.stop <= now;
+
+                let time_str = format_time(p.start);
+                let end_str = format_time(p.stop);
+
+                let marker = if is_current {
+                    "▶ "
+                } else if is_past && ch.catchup_days > 0 {
+                    "⏪"
+                } else if is_past {
+                    "  "
+                } else {
+                    "  "
+                };
+
+                let title_style = if is_current {
+                    Style::default().fg(Color::Green).bold()
+                } else if is_past {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let time_style = if is_current {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                };
+
+                let line = Line::from(vec![
+                    Span::styled(format!(" {}", marker), Style::default().fg(if is_current { Color::Green } else if is_past && ch.catchup_days > 0 { Color::Yellow } else { Color::DarkGray })),
+                    Span::styled(format!("{}-{} ", time_str, end_str), time_style),
+                    Span::styled(&p.title, title_style),
+                ]);
+
+                ListItem::new(line)
+            })
+            .collect();
+
+        let title = if ch.catchup_days > 0 {
+            format!(" Programs (⏪ = archive) ")
+        } else {
+            " Programs ".to_string()
+        };
+
+        let list = List::new(items)
+            .block(Block::default().title(title).borders(Borders::ALL))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Rgb(0, 40, 40))
+                    .fg(Color::Cyan)
+                    .bold(),
+            );
+        f.render_stateful_widget(list, chunks[1], &mut app.epg_state);
+    }
+
+    // Description of selected program
+    let desc_text = if let Some(idx) = app.epg_state.selected() {
+        if idx < app.detail_programs.len() {
+            let p = &app.detail_programs[idx];
+            if p.desc.is_empty() {
+                p.title.clone()
+            } else {
+                format!("{}\n{}", p.title, p.desc)
+            }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    f.render_widget(
+        Paragraph::new(format!(" {}", desc_text))
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .title(" Description ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+        chunks[2],
+    );
+
+    // Hint bar
+    let hint = " Enter: play | L: live | F: fav | ESC: back ";
+    f.render_widget(
+        Paragraph::new(hint).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        ),
+        chunks[3],
+    );
+}
+
+fn format_time(ts: i64) -> String {
+    use chrono::{Local, TimeZone};
+    Local
+        .timestamp_opt(ts, 0)
+        .single()
+        .map(|dt| dt.format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
+fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usize>) {
+    let chunks = Layout::default()
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(area);
+
+    let items: Vec<ListItem> = (0..SETTINGS_COUNT)
+        .map(|i| {
+            let label = SETTINGS_LABELS[i];
+            let val = app.settings_value(i);
+            let is_editing = editing == Some(i);
+            let display_val = if is_editing { &app.edit_buf } else { &val };
+
+            let style = if is_editing {
+                Style::default().fg(Color::Black).bg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let marker = match i {
+                2 | 4 | 5 | 6 => " [Enter: toggle]",
+                _ => " [Enter: edit]",
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("  {}: ", label), Style::default().fg(Color::Cyan).bold()),
+                Span::styled(display_val.to_string(), style),
+                Span::styled(marker, Style::default().fg(Color::DarkGray)),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().title(" Settings ").borders(Borders::ALL))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(30, 30, 30))
+                .add_modifier(Modifier::BOLD),
+        );
+    f.render_stateful_widget(list, chunks[0], &mut app.set_state);
+
+    let hint = if editing.is_some() {
+        " Type to edit | Enter: save | ESC: cancel "
+    } else if let Some(msg) = &app.status_msg {
+        msg.as_str()
+    } else {
+        " Up/Down: navigate | Enter: edit/toggle | ESC: back "
+    };
+    f.render_widget(
+        Paragraph::new(hint).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        ),
+        chunks[1],
+    );
 }

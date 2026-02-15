@@ -19,12 +19,8 @@ pub struct Config {
     pub video_geometry: String,
 }
 
-fn default_fullscreen() -> bool {
-    true
-}
-fn default_geometry() -> String {
-    "1280x720".to_string()
-}
+fn default_fullscreen() -> bool { true }
+fn default_geometry() -> String { "1280x720".into() }
 
 impl Default for Config {
     fn default() -> Self {
@@ -43,17 +39,25 @@ impl Default for Config {
 impl Config {
     pub fn load() -> Self {
         let p = get_config_json_path();
-        let cfg: Config = fs::read_to_string(&p)
+        fs::read_to_string(&p)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        cfg
+            .unwrap_or_default()
     }
+
     pub fn save(&self) -> Result<()> {
-        let d = get_config_dir();
-        let _ = fs::create_dir_all(&d);
-        fs::write(get_config_json_path(), serde_json::to_string_pretty(self)?).unwrap();
+        fs::create_dir_all(get_config_dir())?;
+        fs::write(get_config_json_path(), serde_json::to_string_pretty(self)?)?;
         Ok(())
+    }
+
+    pub fn history_push(&mut self, url: &str) {
+        self.history.retain(|u| u != url);
+        self.history.push(url.to_string());
+        if self.history.len() > 200 {
+            self.history.drain(0..self.history.len() - 200);
+        }
+        let _ = self.save();
     }
 }
 
@@ -102,19 +106,40 @@ pub struct CacheContainer {
     pub data: AppData,
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Clone)]
 pub enum Screen {
     MainMenu,
     CatList,
     ChanList,
+    Detail,
     RadioCatList,
     RadioList,
-    Detail,
     Settings,
-    Input,
+    SettingsEdit(usize),
     Updating,
     LocalList,
     LinkInput,
     Favorites,
     History,
 }
+
+pub const SETTINGS_COUNT: usize = 7;
+pub const SETTINGS_LABELS: [&str; SETTINGS_COUNT] = [
+    "Playlist URL",
+    "EPG URL",
+    "Fullscreen",
+    "Window Geometry",
+    "Theme",
+    "Clear History",
+    "Clear Favorites",
+];
+
+pub const THEME_PRESETS: &[(u8, u8, u8, &str)] = &[
+    (0, 255, 255, "Cyan"),
+    (255, 0, 255, "Magenta"),
+    (0, 255, 128, "Neon Green"),
+    (255, 128, 0, "Orange"),
+    (128, 0, 255, "Purple"),
+    (255, 255, 0, "Yellow"),
+    (255, 0, 0, "Red"),
+];
