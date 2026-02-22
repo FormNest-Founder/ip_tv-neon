@@ -74,6 +74,16 @@ async fn main() -> Result<()> {
             }
         }
 
+        // Run update immediately when entering Updating screen (no keypress needed)
+        if matches!(app.screen, Screen::Updating) {
+            terminal.draw(|f| ui::ui(f, &mut app))?;
+            let _ = update_data(&app.config).await;
+            app.reload_data();
+            app.screen = Screen::MainMenu;
+            app.needs_redraw = true;
+            continue;
+        }
+
         if app.needs_redraw || last_tick.elapsed() >= tick_rate {
             terminal.draw(|f| ui::ui(f, &mut app))?;
             app.needs_redraw = false;
@@ -163,11 +173,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             _ => {}
         },
 
-        Screen::Updating => {
-            let _ = update_data(&app.config).await;
-            app.reload_data();
-            app.screen = Screen::MainMenu;
-        }
+        Screen::Updating => {}
 
         Screen::CatList => match key.code {
             KeyCode::Up => nav_up(&mut app.cat_state, app.data.groups.len()),
