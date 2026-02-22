@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::LazyLock;
 
 static CLEAN_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(BCU|BOX|VF|YOSSO|VIP)\s+").unwrap());
+    LazyLock::new(|| Regex::new(r"$^").unwrap()); // disabled — show full channel names
 
 pub struct App {
     pub config: Config,
@@ -261,15 +261,27 @@ impl App {
     pub fn update_filter(&mut self) {
         let q = self.search.to_lowercase();
         let group = &self.selected_group;
+        // Search within current group first
         self.filtered = self
             .data
             .channels
             .iter()
             .enumerate()
             .filter(|(_, ch)| ch.group == *group)
-            .filter(|(_, ch)| q.is_empty() || self.clean_name(&ch.name).to_lowercase().contains(&q))
+            .filter(|(_, ch)| q.is_empty() || ch.name.to_lowercase().contains(&q))
             .map(|(i, _)| i)
             .collect();
+        // If nothing found and search is active — search across ALL groups
+        if self.filtered.is_empty() && !q.is_empty() {
+            self.filtered = self
+                .data
+                .channels
+                .iter()
+                .enumerate()
+                .filter(|(_, ch)| ch.name.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect();
+        }
         self.ch_state
             .select(if self.filtered.is_empty() { None } else { Some(0) });
         self.needs_redraw = true;

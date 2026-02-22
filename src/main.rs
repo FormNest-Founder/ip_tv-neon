@@ -15,7 +15,7 @@ mod ui;
 mod utils;
 
 use app::App;
-use epg::{scan_local_playlists, update_data};
+use epg::{fetch_radio_now, scan_local_playlists, update_data};
 use models::{Config, Screen, SETTINGS_COUNT};
 
 const MENU_ITEMS: usize = 10;
@@ -59,7 +59,12 @@ async fn main() -> Result<()> {
         ));
     }
 
+    let http_client = reqwest::Client::builder()
+        .user_agent(consts::UA)
+        .timeout(Duration::from_secs(10))
+        .build()?;
     let mut last_tick = Instant::now();
+    let mut radio_tracks_dirty = true;
     let tick_rate = Duration::from_millis(1000);
 
     loop {
@@ -72,6 +77,21 @@ async fn main() -> Result<()> {
                 }
                 _ => {}
             }
+        }
+
+        // Refresh radio tracks when entering Radio screens
+        if matches!(app.screen, Screen::RadioCatList | Screen::RadioList) && radio_tracks_dirty {
+            radio_tracks_dirty = false;
+            let tracks = fetch_radio_now(&http_client).await;
+            for st in &mut app.data.radio {
+                if let Some(t) = tracks.get(&st.id) {
+                    st.track = Some(t.clone());
+                }
+            }
+            app.needs_redraw = true;
+        }
+        if !matches!(app.screen, Screen::RadioCatList | Screen::RadioList) {
+            radio_tracks_dirty = true;
         }
 
         // Run update immediately when entering Updating screen (no keypress needed)

@@ -73,16 +73,6 @@ pub async fn update_data(config: &Config) -> Result<()> {
     let mut cur_grp = "Other".to_string();
     let mut pending_grp: Option<String> = None;
 
-    // NIGHT CITY BLOCKLIST (Case-insensitive fragments, Latin + Cyrillic)
-    let blocklist = [
-        "ARMENIA", "АРМЕНИ", "AZERBAIJAN", "AZƏRBAYCAN", "АЗЕРБАЙДЖАН",
-        "GEORGIA", "ГРУЗИ", "KAZAKHSTAN", "КАЗАХСТАН", "ҚАЗАҚСТАН",
-        "UZBEKISTAN", "УЗБЕКИСТАН", "O'ZBEK", "MOLDOVA", "МОЛДАВ",
-        "LATVIA", "ЛАТВИ", "ESTONIA", "ЭСТОНИ", "LITHUANIA", "ЛИТВ",
-        "ISRAEL", "ИЗРАИЛЬ", "TURKEY", "TÜRK", "ТУРЦИ",
-        "UKRAINE", "УКРАИН", "УКРАЇНСЬК", "BELARUS", "БЕЛАРУС",
-    ];
-
     for line in m3u.lines() {
         let line = line.trim();
         if line.starts_with("#EXTGRP:") {
@@ -123,12 +113,8 @@ pub async fn update_data(config: &Config) -> Result<()> {
         }
     }
 
-    // Apply blocklist and remove empty
-    channels.retain(|ch| {
-        if ch.url.is_empty() { return false; }
-        let up_grp = ch.group.to_uppercase();
-        !blocklist.iter().any(|&b| up_grp.contains(b))
-    });
+    // Remove channels without URL
+    channels.retain(|ch| !ch.url.is_empty());
 
     let groups: HashSet<String> = channels.iter().map(|ch| ch.group.clone()).collect();
 
@@ -227,7 +213,7 @@ pub fn save_data(data: AppData) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String> {
+pub async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Ok(r) = client.get(RADIO_NOW_API).send().await {
         if let Ok(j) = r.json::<serde_json::Value>().await {
