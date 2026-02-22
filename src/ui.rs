@@ -49,10 +49,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
 
         Screen::MainMenu => {
-            let chunks =
-                Layout::default()
-                    .constraints([Constraint::Length(10), Constraint::Min(0)])
-                    .split(area);
+            let has_status = app.status_msg.is_some();
+            let constraints = if has_status {
+                vec![Constraint::Length(10), Constraint::Min(0), Constraint::Length(3)]
+            } else {
+                vec![Constraint::Length(10), Constraint::Min(0)]
+            };
+            let chunks = Layout::default().constraints(constraints).split(area);
             let version = env!("CARGO_PKG_VERSION");
             let status = format!(
                 "   NEON HUB v{}\n   Channels: {}  Radio: {}",
@@ -71,6 +74,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items.map(ListItem::new))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black));
             f.render_stateful_widget(list, chunks[1], &mut app.m_state);
+            if let Some(msg) = &app.status_msg {
+                let color = if msg.starts_with("Update failed") { Color::Red } else { Color::Green };
+                f.render_widget(
+                    Paragraph::new(format!(" {}", msg))
+                        .fg(color)
+                        .block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray))),
+                    chunks[2],
+                );
+            }
         }
 
         Screen::CatList => {

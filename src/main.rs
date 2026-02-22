@@ -77,8 +77,18 @@ async fn main() -> Result<()> {
         // Run update immediately when entering Updating screen (no keypress needed)
         if matches!(app.screen, Screen::Updating) {
             terminal.draw(|f| ui::ui(f, &mut app))?;
-            let _ = update_data(&app.config).await;
-            app.reload_data();
+            match update_data(&app.config).await {
+                Ok(()) => {
+                    app.reload_data();
+                    let ch = app.data.channels.len();
+                    let rd = app.data.radio.len();
+                    let epg = app.data.epg.len();
+                    app.status_msg = Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
+                }
+                Err(e) => {
+                    app.status_msg = Some(format!("Update failed: {}", e));
+                }
+            }
             app.screen = Screen::MainMenu;
             app.needs_redraw = true;
             continue;
@@ -141,8 +151,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
 
     match &app.screen.clone() {
         Screen::MainMenu => match key.code {
-            KeyCode::Up => nav_up(&mut app.m_state, MENU_ITEMS),
-            KeyCode::Down => nav_down(&mut app.m_state, MENU_ITEMS),
+            KeyCode::Up => { app.status_msg = None; nav_up(&mut app.m_state, MENU_ITEMS); }
+            KeyCode::Down => { app.status_msg = None; nav_down(&mut app.m_state, MENU_ITEMS); }
             KeyCode::Enter => match app.m_state.selected().unwrap_or(0) {
                 0 => app.screen = Screen::CatList,
                 1 => app.screen = Screen::RadioCatList,
