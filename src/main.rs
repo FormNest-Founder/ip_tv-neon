@@ -35,29 +35,12 @@ async fn main() -> Result<()> {
         _ => {}
     }
 
-    if debug {
-        utils::main_log("=== NEON IPTV DEBUG START ===");
-        utils::main_log(&format!(
-            "Config: playlist={} epg={}",
-            config.playlist_url, config.epg_url
-        ));
-    }
-
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture, event::EnableBracketedPaste)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(config);
     app.debug = debug;
-
-    if debug {
-        utils::main_log(&format!(
-            "Data loaded: {} channels, {} radio, {} groups",
-            app.data.channels.len(),
-            app.data.radio.len(),
-            app.data.groups.len()
-        ));
-    }
 
     let http_client = reqwest::Client::builder()
         .user_agent(consts::UA)
@@ -68,7 +51,22 @@ async fn main() -> Result<()> {
     let tick_rate = Duration::from_millis(1000);
 
     loop {
-        // Check if MPV has exited
+        // Video suspended: hide TUI, wait for mpv, restore TUI
+        if app.suspended {
+            if let Some(mut child) = app.mpv_handle.take() {
+                let _ = child.wait().await;
+                app.suspended = false;
+                // Restore TUI window via niri
+                let _ = std::process::Command::new("niri")
+                    .args(["msg", "action", "move-column-to-workspace", "1"])
+                    .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+                terminal.clear()?;
+                app.needs_redraw = true;
+                continue;
+            }
+        }
+
+        // Check if background MPV (radio) has exited
         if let Some(ref mut child) = app.mpv_handle {
             match child.try_wait() {
                 Ok(Some(_)) => {
@@ -79,7 +77,6 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Refresh radio tracks when entering Radio screens
         if matches!(app.screen, Screen::RadioCatList | Screen::RadioList) && radio_tracks_dirty {
             radio_tracks_dirty = false;
             let tracks = fetch_radio_now(&http_client).await;
@@ -94,7 +91,6 @@ async fn main() -> Result<()> {
             radio_tracks_dirty = true;
         }
 
-        // Run update immediately when entering Updating screen (no keypress needed)
         if matches!(app.screen, Screen::Updating) {
             terminal.draw(|f| ui::ui(f, &mut app))?;
             match update_data(&app.config).await {
@@ -133,12 +129,7 @@ async fn main() -> Result<()> {
     }
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        event::DisableBracketedPaste
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, event::DisableBracketedPaste)?;
     Ok(())
 }
 
@@ -161,7 +152,6 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         return;
     }
 
-    // While MPV is playing, ESC stops it and returns to TUI
     if app.mpv_handle.is_some() {
         if key.code == KeyCode::Esc {
             app.stop_all();
@@ -245,18 +235,9 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     }
                 }
             }
-            KeyCode::Char(c) => {
-                app.search.push(c);
-                app.update_filter();
-            }
-            KeyCode::Backspace => {
-                app.search.pop();
-                app.update_filter();
-            }
-            KeyCode::Esc => {
-                app.search.clear();
-                app.screen = Screen::CatList;
-            }
+            KeyCode::Char(c) => { app.search.push(c); app.update_filter(); }
+            KeyCode::Backspace => { app.search.pop(); app.update_filter(); }
+            KeyCode::Esc => { app.search.clear(); app.screen = Screen::CatList; }
             _ => {}
         },
 
@@ -282,10 +263,10 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Enter => {
                 if let Some(idx) = app.r_state.selected() {
                     if idx < app.filtered_radio.len() {
-                        let st = &app.data.radio[app.filtered_radio[idx]];
-                        let title = st.title.clone();
-                        let track = st.track.clone().unwrap_or_default();
-                        let url = st.stream.clone();
+                        let (url, title, track) = {
+                            let st = &app.data.radio[app.filtered_radio[idx]];
+                            (st.stream.clone(), st.title.clone(), st.track.clone().unwrap_or_default())
+                        };
                         app.run_mpv(&url, &title, &track, true);
                     }
                 }
@@ -335,13 +316,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Enter => {
                 let idx = app.set_state.selected().unwrap_or(0);
                 match idx {
-                    0 | 1 | 3 => {
-                        app.edit_buf = app.settings_value(idx);
-                        app.screen = Screen::SettingsEdit(idx);
-                    }
-                    2 | 4 | 5 | 6 => {
-                        app.settings_toggle(idx);
-                    }
+                    0 | 1 | 3 => { app.edit_buf = app.settings_value(idx); app.screen = Screen::SettingsEdit(idx); }
+                    2 | 4 | 5 | 6 => { app.settings_toggle(idx); }
                     _ => {}
                 }
             }
@@ -360,10 +336,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     app.status_msg = Some("Saved".into());
                     app.screen = Screen::Settings;
                 }
-                KeyCode::Esc => {
-                    app.edit_buf.clear();
-                    app.screen = Screen::Settings;
-                }
+                KeyCode::Esc => { app.edit_buf.clear(); app.screen = Screen::Settings; }
                 _ => {}
             }
         }
@@ -376,11 +349,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Char('f') => {
                 if let Some(ch_idx) = app.detail_channel {
                     let url = app.data.channels[ch_idx].url.clone();
-                    if app.config.favorites.contains(&url) {
-                        app.config.favorites.remove(&url);
-                    } else {
-                        app.config.favorites.insert(url);
-                    }
+                    if app.config.favorites.contains(&url) { app.config.favorites.remove(&url); }
+                    else { app.config.favorites.insert(url); }
                     let _ = app.config.save();
                 }
             }
@@ -389,52 +359,11 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::LocalList | Screen::LinkInput => {
-            if key.code == KeyCode::Esc {
-                app.screen = Screen::MainMenu;
-            }
+            if key.code == KeyCode::Esc { app.screen = Screen::MainMenu; }
         }
     }
 }
 
 fn diag() -> Result<()> {
-    use consts::get_data_bin_path;
-    use models::CacheContainer;
-
-    let path = get_data_bin_path();
-    println!("Cache: {:?}", path);
-    let f = std::fs::File::open(&path)?;
-    let c: CacheContainer = bincode::deserialize_from(f)?;
-    let d = &c.data;
-    println!("Version: {}", c.version);
-    println!("\n=== GROUPS ({}) ===", d.groups.len());
-    for g in &d.groups {
-        let cnt = d.channels.iter().filter(|ch| ch.group == *g).count();
-        println!("  {:30} -> {} ch", g, cnt);
-    }
-    println!("\n=== CHANNELS (first 5) ===");
-    for ch in d.channels.iter().take(5) {
-        println!(
-            "  [{}] {} url_len={} tvg_id={:?}",
-            ch.group,
-            ch.name,
-            ch.url.len(),
-            ch.tvg_id
-        );
-    }
-    println!("\n=== RADIO GENRES ({}) ===", d.radio_groups.len());
-    for g in &d.radio_groups {
-        print!("{}, ", g);
-    }
-    println!("\n\n=== RADIO (first 5) ===");
-    for r in d.radio.iter().take(5) {
-        println!(
-            "  {} stream_len={} track={:?}",
-            r.title,
-            r.stream.len(),
-            r.track
-        );
-    }
-    println!("\n=== EPG: {} channel IDs ===", d.epg.len());
-    println!("=== name_to_id: {} entries ===", d.name_to_id.len());
     Ok(())
 }

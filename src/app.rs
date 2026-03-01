@@ -6,11 +6,12 @@ use ratatui::widgets::ListState;
 use regex::Regex;
 use std::fs::File;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
+use tokio::process::{Child, Command};
 use std::sync::LazyLock;
 
 static CLEAN_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"$^").unwrap()); // disabled — show full channel names
+    LazyLock::new(|| Regex::new(r"$^").unwrap());
 
 pub struct App {
     pub config: Config,
@@ -33,6 +34,7 @@ pub struct App {
     pub search: String,
     pub edit_buf: String,
     pub quit: bool,
+    pub suspended: bool,
     pub local_files: Vec<PathBuf>,
     pub mpv_handle: Option<Child>,
     pub needs_redraw: bool,
@@ -79,6 +81,7 @@ impl App {
             search: String::new(),
             edit_buf: String::new(),
             quit: false,
+            suspended: false,
             local_files: Vec::new(),
             mpv_handle: None,
             needs_redraw: true,
@@ -108,8 +111,7 @@ impl App {
 
     pub fn stop_all(&mut self) {
         if let Some(mut child) = self.mpv_handle.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = child.start_kill();
         }
     }
 
@@ -193,7 +195,7 @@ impl App {
     }
 
     pub fn run_mpv(&mut self, url: &str, title: &str, sub_title: &str, radio: bool) {
-        let _ = Command::new("pkill").arg("-f").arg("NEON:").status();
+        let _ = std::process::Command::new("pkill").arg("-f").arg("NEON:").stdout(Stdio::null()).stderr(Stdio::null()).status();
         self.stop_all();
 
         let display_title = if sub_title.is_empty() {
@@ -214,42 +216,34 @@ impl App {
             main_log(&format!("MPV launch: url={} radio={} title={}", url, radio, display_title));
         }
 
-        c.stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null());
-
         if radio {
             c.arg("--no-video");
-        } else if self.config.video_fullscreen {
-            c.arg("--fs");
+            c.arg(url);
+            c.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
+            #[cfg(unix)]
+            unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
+            match c.spawn() {
+                Ok(child) => { self.mpv_handle = Some(child); }
+                Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
+            }
         } else {
-            c.arg("--no-keepaspect-window")
-                .arg(format!("--geometry={}", self.config.video_geometry));
-        }
-
-        c.arg(url);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            unsafe {
-                c.pre_exec(|| {
-                    libc::setsid();
-                    Ok(())
-                });
+            if self.config.video_fullscreen {
+                c.arg("--fs");
+            } else {
+                c.arg("--no-keepaspect-window").arg(format!("--geometry={}", self.config.video_geometry));
             }
-        }
-
-        match c.spawn() {
-            Ok(child) => {
-                if self.debug {
-                    main_log(&format!("MPV spawned: pid={}", child.id()));
+            c.arg(url);
+            c.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
+            #[cfg(unix)]
+            unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
+            match c.spawn() {
+                Ok(child) => {
+                    self.mpv_handle = Some(child);
+                    self.suspended = true;
+                    // Hide TUI window via niri
+                    let _ = std::process::Command::new("niri").args(["msg", "action", "move-column-to-workspace", "--focus", "false", "4"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
                 }
-                self.mpv_handle = Some(child);
-            }
-            Err(e) => {
-                main_log(&format!("MPV spawn FAILED: {}", e));
-                self.status_msg = Some(format!("MPV error: {}", e));
+                Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
             }
         }
     }
@@ -261,44 +255,25 @@ impl App {
     pub fn update_filter(&mut self) {
         let q = self.search.to_lowercase();
         let group = &self.selected_group;
-        // Search within current group first
-        self.filtered = self
-            .data
-            .channels
-            .iter()
-            .enumerate()
+        self.filtered = self.data.channels.iter().enumerate()
             .filter(|(_, ch)| ch.group == *group)
             .filter(|(_, ch)| q.is_empty() || ch.name.to_lowercase().contains(&q))
-            .map(|(i, _)| i)
-            .collect();
-        // If nothing found and search is active — search across ALL groups
+            .map(|(i, _)| i).collect();
         if self.filtered.is_empty() && !q.is_empty() {
-            self.filtered = self
-                .data
-                .channels
-                .iter()
-                .enumerate()
+            self.filtered = self.data.channels.iter().enumerate()
                 .filter(|(_, ch)| ch.name.to_lowercase().contains(&q))
-                .map(|(i, _)| i)
-                .collect();
+                .map(|(i, _)| i).collect();
         }
-        self.ch_state
-            .select(if self.filtered.is_empty() { None } else { Some(0) });
+        self.ch_state.select(if self.filtered.is_empty() { None } else { Some(0) });
         self.needs_redraw = true;
     }
 
     pub fn update_radio_filter(&mut self) {
         let genre = &self.selected_radio_genre;
-        self.filtered_radio = self
-            .data
-            .radio
-            .iter()
-            .enumerate()
+        self.filtered_radio = self.data.radio.iter().enumerate()
             .filter(|(_, r)| genre == "All" || r.genres.contains(genre))
-            .map(|(i, _)| i)
-            .collect();
-        self.r_state
-            .select(if self.filtered_radio.is_empty() { None } else { Some(0) });
+            .map(|(i, _)| i).collect();
+        self.r_state.select(if self.filtered_radio.is_empty() { None } else { Some(0) });
         self.needs_redraw = true;
     }
 
@@ -311,8 +286,7 @@ impl App {
             3 => self.config.video_geometry.clone(),
             4 => {
                 let c = self.config.theme_color;
-                THEME_PRESETS.iter()
-                    .find(|p| (p.0, p.1, p.2) == c)
+                THEME_PRESETS.iter().find(|p| (p.0, p.1, p.2) == c)
                     .map(|p| p.3.to_string())
                     .unwrap_or_else(|| format!("({},{},{})", c.0, c.1, c.2))
             }
@@ -335,10 +309,7 @@ impl App {
     pub fn settings_toggle(&mut self, idx: usize) {
         use crate::models::THEME_PRESETS;
         match idx {
-            2 => {
-                self.config.video_fullscreen = !self.config.video_fullscreen;
-                let _ = self.config.save();
-            }
+            2 => { self.config.video_fullscreen = !self.config.video_fullscreen; let _ = self.config.save(); }
             4 => {
                 let cur = self.config.theme_color;
                 let pos = THEME_PRESETS.iter().position(|p| (p.0, p.1, p.2) == cur).unwrap_or(0);
@@ -347,16 +318,8 @@ impl App {
                 self.config.theme_color = (p.0, p.1, p.2);
                 let _ = self.config.save();
             }
-            5 => {
-                self.config.history.clear();
-                let _ = self.config.save();
-                self.status_msg = Some("History cleared".into());
-            }
-            6 => {
-                self.config.favorites.clear();
-                let _ = self.config.save();
-                self.status_msg = Some("Favorites cleared".into());
-            }
+            5 => { self.config.history.clear(); let _ = self.config.save(); self.status_msg = Some("History cleared".into()); }
+            6 => { self.config.favorites.clear(); let _ = self.config.save(); self.status_msg = Some("Favorites cleared".into()); }
             _ => {}
         }
     }

@@ -13,7 +13,7 @@ pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel]) -> &'a str {
 }
 
 pub fn ui(f: &mut Frame, app: &mut App) {
-    let size = f.size();
+    let size = f.area();
     let (r, g, b) = app.config.theme_color;
     let theme = Color::Rgb(r, g, b);
     let block = Block::default()
