@@ -70,6 +70,8 @@ pub struct Channel {
     pub norm_name: String,
     #[serde(default)]
     pub catchup_days: u32,
+    #[serde(default)]
+    pub name_lower: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -98,6 +100,8 @@ pub struct AppData {
     pub groups: Vec<String>,
     pub epg: HashMap<String, Vec<EpgProgram>>,
     pub name_to_id: HashMap<String, String>,
+    #[serde(default)]
+    pub group_counts: HashMap<String, usize>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,7 +110,7 @@ pub struct CacheContainer {
     pub data: AppData,
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum Screen {
     MainMenu,
     CatList,

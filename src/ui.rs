@@ -91,7 +91,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .groups
                 .iter()
                 .map(|g| {
-                    let cnt = app.data.channels.iter().filter(|ch| ch.group == *g).count();
+                    let cnt = app.data.group_counts.get(g).copied().unwrap_or(0);
                     ListItem::new(format!("  {} ({})", g, cnt))
                 })
                 .collect();
@@ -135,7 +135,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
                     // Channel name
                     spans.push(Span::styled(
-                        app.clean_name(&ch.name),
+                        &ch.name,
                         Style::default().fg(Color::White),
                     ));
 
@@ -249,13 +249,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
 
         Screen::Favorites => {
-            let mut favs: Vec<_> = app.config.favorites.iter().collect();
-            favs.sort();
+            let favs = app.sorted_favorites();
             let items: Vec<ListItem> = favs
                 .iter()
                 .map(|url| {
                     let name = get_name_by_url(url, &app.data.channels);
-                    ListItem::new(format!("  {}", app.clean_name(name)))
+                    ListItem::new(format!("  {}", name))
                 })
                 .collect();
             let list = List::new(items)
@@ -277,7 +276,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .rev()
                 .map(|url| {
                     let name = get_name_by_url(url, &app.data.channels);
-                    ListItem::new(format!("  {}", app.clean_name(name)))
+                    ListItem::new(format!("  {}", name))
                 })
                 .collect();
             let list = List::new(items)
@@ -356,7 +355,7 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let header = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
-                format!(" {}{}", app.clean_name(&ch.name), fav_marker),
+                format!(" {}{}", &ch.name, fav_marker),
                 Style::default().fg(theme).bold(),
             ),
         ]),

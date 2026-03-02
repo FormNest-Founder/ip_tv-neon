@@ -5,6 +5,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 mod app;
@@ -26,14 +27,27 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let debug = args.iter().any(|a| a == "--debug");
 
+    let http_client = reqwest::Client::builder()
+        .user_agent(consts::UA)
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
     match args.get(1).map(|s| s.as_str()) {
         Some("update") => {
-            update_data(&config).await?;
+            update_data(&config, &http_client).await?;
             return Ok(());
         }
         Some("diag") => return diag(),
         _ => {}
     }
+
+    // Fix 3: panic hook to restore terminal on panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        original_hook(info);
+    }));
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -41,20 +55,22 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(config);
     app.debug = debug;
-
-    let http_client = reqwest::Client::builder()
-        .user_agent(consts::UA)
-        .timeout(Duration::from_secs(10))
-        .build()?;
     let mut last_tick = Instant::now();
     let mut radio_tracks_dirty = true;
+    let mut radio_task: Option<tokio::task::JoinHandle<HashMap<String, String>>> = None;
     let tick_rate = Duration::from_millis(1000);
 
     loop {
         // Video suspended: hide TUI, wait for mpv, restore TUI
         if app.suspended {
             if let Some(mut child) = app.mpv_handle.take() {
-                let _ = child.wait().await;
+                let wait_result = tokio::time::timeout(
+                    Duration::from_secs(43200), // 12 hours max
+                    child.wait()
+                ).await;
+                if wait_result.is_err() {
+                    let _ = child.start_kill();
+                }
                 app.suspended = false;
                 // Restore TUI window via niri
                 let _ = std::process::Command::new("niri")
@@ -77,15 +93,26 @@ async fn main() -> Result<()> {
             }
         }
 
-        if matches!(app.screen, Screen::RadioCatList | Screen::RadioList) && radio_tracks_dirty {
+        // Async radio track fetch (non-blocking)
+        if matches!(app.screen, Screen::RadioCatList | Screen::RadioList) && radio_tracks_dirty && radio_task.is_none() {
             radio_tracks_dirty = false;
-            let tracks = fetch_radio_now(&http_client).await;
-            for st in &mut app.data.radio {
-                if let Some(t) = tracks.get(&st.id) {
-                    st.track = Some(t.clone());
+            let client = http_client.clone();
+            radio_task = Some(tokio::spawn(async move {
+                fetch_radio_now(&client).await
+            }));
+        }
+        let radio_done = radio_task.as_ref().map_or(false, |t| t.is_finished());
+        if radio_done {
+            if let Some(task) = radio_task.take() {
+                if let Ok(tracks) = task.await {
+                    for st in &mut app.data.radio {
+                        if let Some(t) = tracks.get(&st.id) {
+                            st.track = Some(t.clone());
+                        }
+                    }
+                    app.needs_redraw = true;
                 }
             }
-            app.needs_redraw = true;
         }
         if !matches!(app.screen, Screen::RadioCatList | Screen::RadioList) {
             radio_tracks_dirty = true;
@@ -93,7 +120,7 @@ async fn main() -> Result<()> {
 
         if matches!(app.screen, Screen::Updating) {
             terminal.draw(|f| ui::ui(f, &mut app))?;
-            match update_data(&app.config).await {
+            match update_data(&app.config, &http_client).await {
                 Ok(()) => {
                     app.reload_data();
                     let ch = app.data.channels.len();
@@ -159,7 +186,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         return;
     }
 
-    match &app.screen.clone() {
+    match app.screen {
         Screen::MainMenu => match key.code {
             KeyCode::Up => { app.status_msg = None; nav_up(&mut app.m_state, MENU_ITEMS); }
             KeyCode::Down => { app.status_msg = None; nav_down(&mut app.m_state, MENU_ITEMS); }
@@ -280,8 +307,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Down => nav_down(&mut app.fav_state, app.config.favorites.len()),
             KeyCode::Enter => {
                 if let Some(idx) = app.fav_state.selected() {
-                    let mut favs: Vec<_> = app.config.favorites.iter().collect();
-                    favs.sort();
+                    let favs = app.sorted_favorites();
                     if idx < favs.len() {
                         let url = favs[idx].clone();
                         let name = ui::get_name_by_url(&url, &app.data.channels).to_string();
@@ -326,7 +352,6 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::SettingsEdit(field) => {
-            let field = *field;
             match key.code {
                 KeyCode::Char(c) => app.edit_buf.push(c),
                 KeyCode::Backspace => { app.edit_buf.pop(); }
@@ -365,5 +390,16 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
 }
 
 fn diag() -> Result<()> {
+    println!("NEON IPTV Diagnostics");
+    println!("Config: {}", consts::get_config_json_path().display());
+    println!("Cache:  {}", consts::get_data_bin_path().display());
+    println!("Config exists: {}", consts::get_config_json_path().exists());
+    println!("Cache exists:  {}", consts::get_data_bin_path().exists());
+    if let Ok(raw) = std::fs::read_to_string(consts::get_config_json_path()) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            println!("Playlist: {}", v["playlist_url"].as_str().unwrap_or("N/A"));
+            println!("EPG URL:  {}", v["epg_url"].as_str().unwrap_or("N/A"));
+        }
+    }
     Ok(())
 }

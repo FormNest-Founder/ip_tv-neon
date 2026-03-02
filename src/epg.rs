@@ -12,19 +12,14 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::LazyLock;
-use std::time::Duration;
 
 static RE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-id="([^"]+)""#).unwrap());
 static RE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-name="([^"]+)""#).unwrap());
 static RE_GROUP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"group-title="([^"]+)""#).unwrap());
 static RE_REC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-rec="(\d+)""#).unwrap());
 
-pub async fn update_data(config: &Config) -> Result<()> {
+pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()> {
     main_log("Starting update_data...");
-    let client = reqwest::Client::builder()
-        .user_agent(UA)
-        .timeout(Duration::from_secs(15))
-        .build()?;
 
     let tracks_map = fetch_radio_now(&client).await;
     let mut radio = Vec::new();
@@ -98,6 +93,7 @@ pub async fn update_data(config: &Config) -> Result<()> {
             let rec_days = RE_REC.captures(line).and_then(|c| c[1].parse().ok()).unwrap_or(0);
             let name = line.rsplit(",").next().unwrap_or("").trim().to_string();
             channels.push(Channel {
+                name_lower: name.to_lowercase(),
                 name,
                 group: cur_grp.clone(),
                 url: "".into(),
@@ -109,6 +105,7 @@ pub async fn update_data(config: &Config) -> Result<()> {
             if let Some(ch) = channels.last_mut() {
                 ch.url = line.to_string();
                 ch.norm_name = normalize(&ch.name);
+                ch.name_lower = ch.name.to_lowercase();
             }
         }
     }
@@ -135,43 +132,62 @@ pub async fn update_data(config: &Config) -> Result<()> {
             let mut buf = Vec::new();
             let mut cur_id = String::new();
             let mut cur_prog: Option<EpgProgram> = None;
-            let mut tag = String::new();
+
+            #[derive(PartialEq)]
+            enum XmlTag { None, Title, Desc, DisplayName }
+            let mut tag = XmlTag::None;
 
             loop {
                 match reader.read_event_into(&mut buf) {
                     Ok(XmlEvent::Start(e)) => {
-                        tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                        match tag.as_str() {
-                            "channel" => { cur_id = e.attributes().flatten().find(|a| a.key.as_ref() == b"id").map(|a| String::from_utf8_lossy(&a.value).to_string()).unwrap_or_default(); }
-                            "display-name" => { }
-                            "programme" => {
-                                let start = e.attributes().flatten().find(|a| a.key.as_ref() == b"start").map(|a| parse_xml_time(&String::from_utf8_lossy(&a.value))).unwrap_or(0);
-                                let stop = e.attributes().flatten().find(|a| a.key.as_ref() == b"stop").map(|a| parse_xml_time(&String::from_utf8_lossy(&a.value))).unwrap_or(0);
-                                let ch_id = e.attributes().flatten().find(|a| a.key.as_ref() == b"channel").map(|a| String::from_utf8_lossy(&a.value).to_string()).unwrap_or_default();
+                        match e.name().as_ref() {
+                            b"channel" => {
+                                cur_id = e.attributes().flatten().find(|a| a.key.as_ref() == b"id").map(|a| String::from_utf8_lossy(&a.value).to_string()).unwrap_or_default();
+                                tag = XmlTag::None;
+                            }
+                            b"display-name" => { tag = XmlTag::DisplayName; }
+                            b"programme" => {
+                                let mut start = 0i64;
+                                let mut stop = 0i64;
+                                let mut ch_id = String::new();
+                                for attr in e.attributes().flatten() {
+                                    match attr.key.as_ref() {
+                                        b"start" => start = parse_xml_time(&String::from_utf8_lossy(&attr.value)),
+                                        b"stop" => stop = parse_xml_time(&String::from_utf8_lossy(&attr.value)),
+                                        b"channel" => ch_id = String::from_utf8_lossy(&attr.value).to_string(),
+                                        _ => {}
+                                    }
+                                }
                                 if stop > limit {
-                                    cur_prog = Some(EpgProgram { start, stop, title: "".into(), desc: "".into() });
+                                    cur_prog = Some(EpgProgram { start, stop, title: String::new(), desc: String::new() });
                                     cur_id = ch_id;
                                 }
+                                tag = XmlTag::None;
                             }
-                            _ => {}
+                            b"title" => { tag = XmlTag::Title; }
+                            b"desc" => { tag = XmlTag::Desc; }
+                            _ => {} // unknown inner tags — don't overwrite current tag
                         }
                     }
                     Ok(XmlEvent::Text(e)) => {
                         let text = e.unescape().unwrap_or_default().into_owned();
-                        match tag.as_str() {
-                            "display-name" => { name_to_id.insert(normalize(&text), cur_id.clone()); }
-                            "title" => { if let Some(p) = cur_prog.as_mut() { p.title = text; } }
-                            "desc" => { if let Some(p) = cur_prog.as_mut() { p.desc = text; } }
-                            _ => {}
+                        match tag {
+                            XmlTag::DisplayName => { name_to_id.insert(normalize(&text), cur_id.clone()); }
+                            XmlTag::Title => { if let Some(p) = cur_prog.as_mut() { p.title = text; } }
+                            XmlTag::Desc => { if let Some(p) = cur_prog.as_mut() { p.desc = text; } }
+                            XmlTag::None => {}
                         }
                     }
                     Ok(XmlEvent::End(e)) => {
-                        if e.name().as_ref() == b"programme" {
-                            if let Some(p) = cur_prog.take() {
-                                epg.entry(cur_id.clone()).or_default().push(p);
+                        match e.name().as_ref() {
+                            b"programme" => {
+                                if let Some(p) = cur_prog.take() {
+                                    epg.entry(cur_id.clone()).or_default().push(p);
+                                }
                             }
+                            b"title" | b"desc" | b"display-name" => { tag = XmlTag::None; }
+                            _ => {}
                         }
-                        tag.clear();
                     }
                     Ok(XmlEvent::Eof) => break,
                     Err(e) => { main_log(&format!("EPG XML parse error: {}", e)); break; }
@@ -189,6 +205,11 @@ pub async fn update_data(config: &Config) -> Result<()> {
     let mut sorted_groups: Vec<String> = groups.into_iter().collect();
     sorted_groups.sort();
 
+    let mut group_counts: HashMap<String, usize> = HashMap::new();
+    for ch in &channels {
+        *group_counts.entry(ch.group.clone()).or_insert(0) += 1;
+    }
+
     let data = AppData {
         channels,
         radio,
@@ -196,6 +217,7 @@ pub async fn update_data(config: &Config) -> Result<()> {
         groups: sorted_groups,
         epg,
         name_to_id,
+        group_counts,
     };
 
     save_data(data)?;
@@ -244,10 +266,16 @@ pub fn get_current_epg(ch: &Channel, data: &AppData, now: i64) -> Option<EpgProg
 
 pub fn scan_local_playlists() -> Vec<PathBuf> {
     let mut res = Vec::new();
-    if let Ok(entries) = fs::read_dir(".") {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().is_some_and(|ext| ext == "m3u" || ext == "m3u8") { res.push(p); }
+    let scan_dirs: Vec<PathBuf> = [dirs::home_dir(), dirs::download_dir(), dirs::video_dir()]
+        .into_iter()
+        .flatten()
+        .collect();
+    for dir in scan_dirs {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|ext| ext == "m3u" || ext == "m3u8") { res.push(p); }
+            }
         }
     }
     res

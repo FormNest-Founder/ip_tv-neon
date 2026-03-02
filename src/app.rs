@@ -3,15 +3,10 @@ use crate::epg::find_epg_id;
 use crate::models::{AppData, CacheContainer, Config, EpgProgram, Screen};
 use crate::utils::main_log;
 use ratatui::widgets::ListState;
-use regex::Regex;
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
-use std::sync::LazyLock;
-
-static CLEAN_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"$^").unwrap());
 
 pub struct App {
     pub config: Config,
@@ -113,6 +108,7 @@ impl App {
         if let Some(mut child) = self.mpv_handle.take() {
             let _ = child.start_kill();
         }
+        self.suspended = false;
     }
 
     pub fn open_detail(&mut self, channel_idx: usize) {
@@ -195,7 +191,6 @@ impl App {
     }
 
     pub fn run_mpv(&mut self, url: &str, title: &str, sub_title: &str, radio: bool) {
-        let _ = std::process::Command::new("pkill").arg("-f").arg("NEON:").stdout(Stdio::null()).stderr(Stdio::null()).status();
         self.stop_all();
 
         let display_title = if sub_title.is_empty() {
@@ -248,8 +243,10 @@ impl App {
         }
     }
 
-    pub fn clean_name(&self, name: &str) -> String {
-        CLEAN_REGEX.replace(name, "").to_string()
+    pub fn sorted_favorites(&self) -> Vec<&String> {
+        let mut favs: Vec<_> = self.config.favorites.iter().collect();
+        favs.sort();
+        favs
     }
 
     pub fn update_filter(&mut self) {
@@ -257,11 +254,11 @@ impl App {
         let group = &self.selected_group;
         self.filtered = self.data.channels.iter().enumerate()
             .filter(|(_, ch)| ch.group == *group)
-            .filter(|(_, ch)| q.is_empty() || ch.name.to_lowercase().contains(&q))
+            .filter(|(_, ch)| q.is_empty() || ch.name_lower.contains(&q))
             .map(|(i, _)| i).collect();
         if self.filtered.is_empty() && !q.is_empty() {
             self.filtered = self.data.channels.iter().enumerate()
-                .filter(|(_, ch)| ch.name.to_lowercase().contains(&q))
+                .filter(|(_, ch)| ch.name_lower.contains(&q))
                 .map(|(i, _)| i).collect();
         }
         self.ch_state.select(if self.filtered.is_empty() { None } else { Some(0) });
