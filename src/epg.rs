@@ -128,7 +128,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                 Box::new(BufReader::new(&b[..]))
             };
             let mut reader = Reader::from_reader(reader_raw);
-            reader.trim_text(true);
+            reader.config_mut().trim_text(true);
             let mut buf = Vec::new();
             let mut cur_id = String::new();
             let mut cur_prog: Option<EpgProgram> = None;
