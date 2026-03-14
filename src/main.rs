@@ -475,7 +475,9 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     let _ = app.config.save();
                 }
             }
-            KeyCode::Esc => app.screen = Screen::ChanList,
+            KeyCode::Esc => {
+                app.screen = app.detail_return_screen.take().unwrap_or(Screen::ChanList);
+            }
             _ => {}
         },
 

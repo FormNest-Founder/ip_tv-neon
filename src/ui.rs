@@ -339,13 +339,13 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = Color::Rgb(r, g, b);
     let is_fav = app.config.favorites.contains(&ch.url);
 
-    // Layout: header (4 lines) | EPG list | description (5 lines) | hint bar
+    // Layout: header (4 lines) | EPG list (40%) | description (40%) | hint bar
     let chunks = Layout::default()
         .constraints([
             Constraint::Length(4),
-            Constraint::Min(5),
-            Constraint::Length(6),
-            Constraint::Length(3),
+            Constraint::Percentage(45),
+            Constraint::Percentage(45),
+            Constraint::Length(1),
         ])
         .split(area);
 
@@ -471,13 +471,8 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     );
 
     // Hint bar
-    let hint = " Enter: play | L: live | F: fav | ESC: back ";
     f.render_widget(
-        Paragraph::new(hint).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        ),
+        Paragraph::new(" Enter: play | L: live | F: fav | ESC: back ").fg(Color::DarkGray),
         chunks[3],
     );
 }

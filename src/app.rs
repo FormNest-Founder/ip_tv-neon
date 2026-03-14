@@ -39,6 +39,7 @@ pub struct App {
     pub detail_channel: Option<usize>,
     pub detail_programs: Vec<EpgProgram>,
     pub detail_current_idx: Option<usize>,
+    pub detail_return_screen: Option<Screen>,
     // AI Chat
     pub ai_query: String,
     pub ai_results: Vec<AiSearchResult>,
@@ -94,6 +95,7 @@ impl App {
             detail_channel: None,
             detail_programs: Vec::new(),
             detail_current_idx: None,
+            detail_return_screen: None,
             ai_query: String::new(),
             ai_results: Vec::new(),
             ai_state: ListState::default(),
@@ -128,6 +130,7 @@ impl App {
     }
 
     pub fn open_detail(&mut self, channel_idx: usize) {
+        self.detail_return_screen = Some(self.screen);
         let ch = &self.data.channels[channel_idx];
         self.detail_channel = Some(channel_idx);
 
