@@ -25,7 +25,7 @@ fn default_geometry() -> String { "1280x720".into() }
 impl Default for Config {
     fn default() -> Self {
         Self {
-            playlist_url: "http://epg.one/edem_epg_ico2.m3u8".into(),
+            playlist_url: String::new(),
             epg_url: RECOMMENDED_EPG.into(),
             theme_color: (0, 255, 255),
             favorites: HashSet::new(),
@@ -122,9 +122,11 @@ pub enum Screen {
     SettingsEdit(usize),
     Updating,
     LocalList,
+    #[allow(dead_code)]
     LinkInput,
     Favorites,
     History,
+    AiChat,
 }
 
 pub const SETTINGS_COUNT: usize = 7;

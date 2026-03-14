@@ -68,7 +68,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 chunks[0],
             );
             let items = [
-                "  IPTV", "  RADIO", "  LOCAL", "  PLAY LINK", "  FAVORITES",
+                "  IPTV", "  RADIO", "  LOCAL", "  AI CHAT", "  FAVORITES",
                 "  HISTORY", "  STOP ALL", "  UPDATE", "  SETTINGS", "  EXIT",
             ];
             let list = List::new(items.map(ListItem::new))
@@ -314,6 +314,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             render_detail(f, app, area);
         }
 
+        Screen::AiChat => {
+            render_ai_chat(f, app, area, theme);
+        }
+
         Screen::LinkInput => {
             f.render_widget(
                 Paragraph::new("\n\n  Not yet implemented.\n  Press ESC to return.")
@@ -541,5 +545,163 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
                 .border_style(Style::default().fg(Color::DarkGray)),
         ),
         chunks[1],
+    );
+}
+
+fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
+    let focus_border = |focused: bool| -> Style {
+        if focused { Style::default().fg(theme) } else { Style::default().fg(Color::DarkGray) }
+    };
+
+    // Split: top = results/content, bottom = chat + input
+    let main_chunks = Layout::default()
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    // === TOP HALF: Results list (or empty placeholder) ===
+    if app.ai_results.is_empty() {
+        let hint = if app.ai_chat_history.is_empty() {
+            "  Ask something — results will appear here"
+        } else {
+            "  No results for this query"
+        };
+        f.render_widget(
+            Paragraph::new(hint)
+                .fg(Color::DarkGray)
+                .block(
+                    Block::default()
+                        .title(" Results ")
+                        .borders(Borders::ALL)
+                        .border_style(focus_border(false)),
+                ),
+            main_chunks[0],
+        );
+    } else {
+        // Render results list
+        let now = Utc::now().timestamp();
+        let items: Vec<ListItem> = app.ai_results.iter().map(|r| {
+            let mut spans: Vec<Span> = Vec::new();
+            if r.is_live {
+                spans.push(Span::styled(" LIVE ", Style::default().fg(Color::Black).bg(Color::Green).bold()));
+                spans.push(Span::raw(" "));
+            } else if r.has_archive {
+                spans.push(Span::styled(" REC ", Style::default().fg(Color::Black).bg(Color::Yellow).bold()));
+                spans.push(Span::raw(" "));
+            } else if r.program.start > now {
+                spans.push(Span::styled("  ▷  ", Style::default().fg(Color::Cyan)));
+            } else {
+                spans.push(Span::raw("     "));
+            }
+            spans.push(Span::styled(&r.channel_name, Style::default().fg(Color::Cyan).bold()));
+            spans.push(Span::raw("  "));
+            if r.program.start > 0 {
+                spans.push(Span::styled(
+                    format!("{}-{}", format_time(r.program.start), format_time(r.program.stop)),
+                    Style::default().fg(Color::DarkGray),
+                ));
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                &r.program.title,
+                Style::default().fg(if r.is_live { Color::Green } else { Color::White }),
+            ));
+            ListItem::new(Line::from(spans))
+        }).collect();
+
+        let title = format!(" Results ({}) ", app.ai_results.len());
+        let results_block = Block::default()
+            .title(title)
+            .title_bottom(Line::from(" Enter: play | D: detail | Tab: chat ").fg(Color::DarkGray))
+            .borders(Borders::ALL)
+            .border_style(focus_border(app.ai_focus_results));
+        let list = List::new(items)
+            .block(results_block)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Rgb(40, 0, 40))
+                    .fg(Color::Magenta)
+                    .bold(),
+            );
+        f.render_stateful_widget(list, main_chunks[0], &mut app.ai_state);
+    }
+
+    // === BOTTOM HALF: Chat history + input ===
+    let bottom_chunks = Layout::default()
+        .constraints([Constraint::Min(3), Constraint::Length(3), Constraint::Length(1)])
+        .split(main_chunks[1]);
+
+    // Chat messages
+    let mut chat_lines: Vec<Line> = Vec::new();
+    for msg in &app.ai_chat_history {
+        if msg.is_user {
+            chat_lines.push(Line::from(vec![
+                Span::styled("You: ", Style::default().fg(theme).bold()),
+                Span::styled(&msg.text, Style::default().fg(Color::White)),
+            ]));
+        } else {
+            for line in msg.text.lines() {
+                chat_lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(Color::Rgb(180, 200, 255)),
+                )));
+            }
+        }
+        chat_lines.push(Line::from(""));
+    }
+    if app.ai_loading {
+        chat_lines.push(Line::from(Span::styled(
+            "  Thinking...",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
+        )));
+    }
+
+    // Auto-scroll: estimate wrapped line count
+    let inner_w = bottom_chunks[0].width.saturating_sub(2) as usize;
+    let visible_h = bottom_chunks[0].height.saturating_sub(2) as usize;
+    let mut wrapped_total = 0usize;
+    for line in &chat_lines {
+        let chars: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        wrapped_total += if inner_w > 0 && chars > inner_w { (chars + inner_w - 1) / inner_w } else { 1 };
+    }
+    let scroll = if wrapped_total > visible_h {
+        (wrapped_total - visible_h) as u16
+    } else {
+        0
+    };
+
+    f.render_widget(
+        Paragraph::new(chat_lines)
+            .wrap(Wrap { trim: true })
+            .scroll((scroll, 0))
+            .block(
+                Block::default()
+                    .title(" Chat ")
+                    .borders(Borders::ALL)
+                    .border_style(focus_border(!app.ai_focus_results)),
+            ),
+        bottom_chunks[0],
+    );
+
+    // Input line
+    let input_border = if app.ai_loading { Color::Yellow } else { theme };
+    f.render_widget(
+        Paragraph::new(format!(" > {}", app.ai_query))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(input_border)),
+            ),
+        bottom_chunks[1],
+    );
+
+    // Hint bar
+    let hint = if app.ai_focus_results {
+        " Enter: play | D: details | Tab: chat | ESC: back "
+    } else {
+        " Enter: send | Tab: results | ESC: back "
+    };
+    f.render_widget(
+        Paragraph::new(hint).fg(Color::DarkGray),
+        bottom_chunks[2],
     );
 }

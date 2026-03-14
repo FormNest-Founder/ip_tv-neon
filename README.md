@@ -1,92 +1,120 @@
-# NIGHT CITY NEON HUB (ip_tv-neon)
+# NEON HUB — IPTV/Radio TUI Player
 
-TUI медиа-хаб для IPTV и радио. Rust + ratatui + MPV.
+Terminal media hub for IPTV and Radio. Rust + ratatui + MPV.
 
-## Возможности
+## Features
 
 ### IPTV
-- Категории каналов с предвычисленным подсчётом (O(1) на рендер)
-- Поиск по каналам в реальном времени (предвычисленный lowercase, без аллокаций на keypress)
-- EPG: прогрессбар текущей передачи с градиентом (зелёный/жёлтый/оранжевый), название программы
-- Маркеры каналов: `★` избранное, `⏪` архив
-- Detail-экран: полная EPG-программа с временами, описаниями, выделением текущей передачи
+- Channel categories with instant counts
+- Real-time search across channels
+- EPG: progress bar with gradient (green/yellow/orange), current program title
+- Channel markers: `★` favorite, `⏪` archive
+- Detail screen: full EPG schedule with times, descriptions, current program highlight
 
-### TimeShift (Архив)
-- Автоопределение `tvg-rec` из плейлиста (дни архива)
-- Прошлые передачи воспроизводятся через catchup URL (`?utc=START&lutc=STOP`)
-- В Detail-экране архивные программы помечены `⏪`
+### TimeShift (Archive)
+- Auto-detection of `tvg-rec` days from playlist
+- Past programs playback via catchup URL (`?utc=START&lutc=STOP`)
+- Archive programs marked with `⏪` in detail screen
 
-### Radio Record
-- Все станции Radio Record с жанрами
-- Текущий трек (исполнитель — песня) в списке станций
-- Неблокирующий fetch треков через `tokio::spawn`
+### AI Chat (DeepSeek)
+- Smart TV assistant — recommends movies/shows from current broadcast
+- Sees what's playing NOW across all channels (EPG context)
+- Personalized suggestions based on viewing history
+- Split-screen: results (top) + chat (bottom)
+- Searches EPG by specific titles extracted from AI response
+
+### Radio
+- Radio Record stations with genres
+- Now playing track info (artist — song)
+- Non-blocking async track fetch
 
 ### Suspended Mode (Video)
-- При запуске видео TUI окно скрывается (niri IPC → workspace 4)
-- После закрытия MPV — TUI автоматически возвращается (workspace 1)
-- Защитный timeout 12ч на ожидание MPV
-- Radio: фоновый процесс, TUI остаётся видимым
+- Video launch hides TUI window (niri IPC → workspace 4)
+- TUI auto-restores after MPV closes
+- Radio: background process, TUI stays visible
 
-### Прочее
-- Избранное и история (с дедупликацией, лимит 200)
-- Настройки: playlist URL, EPG URL, fullscreen, geometry, тема (7 пресетов), очистка истории/избранного
-- Локальные плейлисты (.m3u/.m3u8 из ~/Downloads, ~/Videos)
-- Бинарный кэш с версионированием (авто-сброс при обновлении)
-- Panic hook: терминал корректно восстанавливается при падении
+### Other
+- Favorites and history (dedup, limit 200)
+- Settings: playlist URL, EPG URL, fullscreen, geometry, theme (7 presets)
+- Local playlists (.m3u/.m3u8)
+- Binary cache with versioning (auto-reset on update)
+- Panic hook: terminal restores on crash
 
-## Управление
+## Controls
 
-| Клавиша | Действие |
-|---------|----------|
-| `↑/↓` | Навигация |
-| `Enter` | Выбор / воспроизведение |
-| `Esc` | Назад / остановить MPV |
-| `f` | Добавить/убрать из избранного |
-| `l` | Live (в Detail-экране) |
-| Буквы | Поиск (в списке каналов) |
-| `Backspace` | Стереть символ поиска |
-| `Ctrl+C` | Выход |
+| Key | Action |
+|-----|--------|
+| `↑/↓` | Navigate |
+| `Enter` | Select / play |
+| `Esc` | Back / stop MPV |
+| `f` | Toggle favorite |
+| `l` | Play live (Detail screen) |
+| `d` | Channel details (AI results) |
+| `Tab` | Toggle focus (AI Chat) |
+| Letters | Search / chat input |
+| `Ctrl+C` | Quit |
 
-## Сборка и установка
-
-```bash
-# Удалённая сборка (Oracle VPS Docker, Haswell-optimized, Clang LTO)
-remote_cargo_build.sh ~/Git/ip_tv-neon ~/.local/bin ip_tv
-```
-
-## CLI
+## Install
 
 ```bash
-ip_tv            # Запуск TUI
-ip_tv --debug    # С дебаг-логом (/tmp/neon_iptv.log)
-ip_tv update     # Обновить кэш (плейлист + EPG + радио)
-ip_tv diag       # Диагностика (пути, URLs, состояние кэша)
+# Build (requires Rust toolchain)
+cargo build --release
+cp target/release/ip_tv ~/.local/bin/
 ```
 
-## Конфигурация
+## Usage
 
-| Файл | Назначение |
-|------|------------|
-| `~/.config/neon-iptv/config.json` | Настройки (URL, тема, избранное, история) |
-| `~/.cache/neon-iptv/data.bin` | Бинарный кэш данных (bincode, версия 911) |
-| `~/.config/mpv/mpv.conf` | Настройки плеера |
+```bash
+ip_tv            # Launch TUI
+ip_tv --debug    # With debug log (/tmp/neon_iptv.log)
+ip_tv update     # Update cache (playlist + EPG + radio)
+ip_tv diag       # Diagnostics (paths, URLs, cache state)
+```
 
-## Стек
+## Configuration
 
-- **Rust** + tokio (async: process, spawn, timeout)
-- **ratatui** 0.28 + crossterm (TUI)
-- **reqwest** (HTTP), **quick-xml** (EPG, enum-based parser), **bincode** (кэш)
-- **MPV** (внешний плеер, `tokio::process::Command`, setsid)
-- **niri IPC** (управление окнами в Wayland)
+| File | Purpose |
+|------|---------|
+| `~/.config/neon-iptv/config.json` | Settings (URLs, theme, favorites, history) |
+| `~/.cache/neon-iptv/data.bin` | Binary data cache (bincode, versioned) |
 
-## Архитектура
+### Environment
+
+```bash
+# Required for AI Chat feature
+export DEEPSEEK_API_KEY="your-api-key"
+```
+
+### First Run
+
+1. Launch `ip_tv`
+2. Go to Settings → Playlist URL → enter your M3U/M3U8 playlist URL
+3. Go to Settings → EPG URL → enter EPG source (default: epg.one)
+4. Select Update from main menu
+
+## Stack
+
+- **Rust** + tokio (async runtime)
+- **ratatui** 0.29 + crossterm (TUI)
+- **reqwest** (HTTP client)
+- **quick-xml** (EPG XML parser)
+- **bincode** (binary cache)
+- **MPV** (external player via `tokio::process`)
+- **DeepSeek API** (AI chat, optional)
+
+## Architecture
 
 ```
-main.rs    — Event loop, async radio fetch, panic hook, suspended mode
-app.rs     — App state, MPV launch (video/radio), filters, sorted_favorites
-ui.rs      — Рендеринг всех экранов (ratatui widgets, group_counts O(1))
-epg.rs     — Плейлист/EPG/радио парсинг, enum XmlTag, shared HTTP client
-models.rs  — Структуры (Config, Channel+name_lower, Screen Copy, AppData+group_counts)
-utils.rs   — normalize, parse_xml_time (NaiveDateTime fallback), main_log
-consts.rs  — Константы, XDG пути, версия кэша
+main.rs    — Event loop, async tasks, suspended mode, key handling
+app.rs     — App state, MPV launch, filters, AI play
+ai.rs      — DeepSeek chat, EPG context builder, keyword extraction, EPG search
+ui.rs      — Screen rendering (ratatui widgets)
+epg.rs     — Playlist/EPG/radio parsing, XML parser
+models.rs  — Data structures (Config, Channel, Screen, AppData)
+utils.rs   — normalize, parse_xml_time, logging
+consts.rs  — Constants, XDG paths, cache version
 ```
+
+## License
+
+MIT

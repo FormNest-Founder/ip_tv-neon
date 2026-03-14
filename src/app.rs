@@ -1,3 +1,4 @@
+use crate::ai::{AiSearchResult, ChatMsg};
 use crate::consts::*;
 use crate::epg::find_epg_id;
 use crate::models::{AppData, CacheContainer, Config, EpgProgram, Screen};
@@ -38,6 +39,14 @@ pub struct App {
     pub detail_channel: Option<usize>,
     pub detail_programs: Vec<EpgProgram>,
     pub detail_current_idx: Option<usize>,
+    // AI Chat
+    pub ai_query: String,
+    pub ai_results: Vec<AiSearchResult>,
+    pub ai_state: ListState,
+    pub ai_loading: bool,
+    pub ai_chat_history: Vec<ChatMsg>,
+    pub ai_focus_results: bool,
+    pub ai_chat_scroll: u16,
 }
 
 impl App {
@@ -85,6 +94,13 @@ impl App {
             detail_channel: None,
             detail_programs: Vec::new(),
             detail_current_idx: None,
+            ai_query: String::new(),
+            ai_results: Vec::new(),
+            ai_state: ListState::default(),
+            ai_loading: false,
+            ai_chat_history: Vec::new(),
+            ai_focus_results: false,
+            ai_chat_scroll: 0,
         };
         app.m_state.select(Some(0));
         app.cat_state.select(Some(0));
@@ -241,6 +257,34 @@ impl App {
                 Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
             }
         }
+    }
+
+    pub fn ai_play_selected(&mut self) {
+        let idx = match self.ai_state.selected() {
+            Some(i) if i < self.ai_results.len() => i,
+            _ => return,
+        };
+        let result = self.ai_results[idx].clone();
+        let ch = &self.data.channels[result.channel_idx];
+        let url = ch.url.clone();
+        let name = ch.name.clone();
+        let now = chrono::Utc::now().timestamp();
+
+        if result.program.start > 0 {
+            let is_current = now >= result.program.start && now < result.program.stop;
+            let is_future = result.program.start > now;
+            if is_current || is_future {
+                self.run_mpv(&url, &name, &result.program.title, false);
+            } else if ch.catchup_days > 0 {
+                let archive_url = format!("{}?utc={}&lutc={}", url, result.program.start, result.program.stop);
+                self.run_mpv(&archive_url, &name, &result.program.title, false);
+            } else {
+                self.run_mpv(&url, &name, &result.program.title, false);
+            }
+        } else {
+            self.run_mpv(&url, &name, "", false);
+        }
+        self.config.history_push(&url);
     }
 
     pub fn sorted_favorites(&self) -> Vec<&String> {

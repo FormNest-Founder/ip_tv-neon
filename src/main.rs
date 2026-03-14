@@ -8,6 +8,7 @@ use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+mod ai;
 mod app;
 mod consts;
 mod epg;
@@ -58,6 +59,7 @@ async fn main() -> Result<()> {
     let mut last_tick = Instant::now();
     let mut radio_tracks_dirty = true;
     let mut radio_task: Option<tokio::task::JoinHandle<HashMap<String, String>>> = None;
+    let mut ai_task: Option<tokio::task::JoinHandle<ai::AiChatResponse>> = None;
     let tick_rate = Duration::from_millis(1000);
 
     loop {
@@ -118,6 +120,31 @@ async fn main() -> Result<()> {
             radio_tracks_dirty = true;
         }
 
+        // Check if AI chat task finished
+        if ai_task.as_ref().is_some_and(|t| t.is_finished()) {
+            if let Some(task) = ai_task.take() {
+                if let Ok(response) = task.await {
+                    // Add assistant message to chat history
+                    app.ai_chat_history.push(ai::ChatMsg {
+                        is_user: false,
+                        text: response.text,
+                    });
+                    // If keywords returned — search EPG
+                    if let Some(ref kw) = response.keywords {
+                        let now = chrono::Utc::now().timestamp();
+                        app.ai_results = ai::search_epg(&app.data, kw, now);
+                        app.ai_state.select(if app.ai_results.is_empty() { None } else { Some(0) });
+                        if !app.ai_results.is_empty() {
+                            app.ai_focus_results = true;
+                        }
+                    }
+                    app.ai_loading = false;
+                    app.ai_chat_scroll = 0;
+                    app.needs_redraw = true;
+                }
+            }
+        }
+
         if matches!(app.screen, Screen::Updating) {
             terminal.draw(|f| ui::ui(f, &mut app))?;
             match update_data(&app.config, &http_client).await {
@@ -146,7 +173,69 @@ async fn main() -> Result<()> {
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                handle_key(&mut app, key).await;
+                // AI chat needs http_client and ai_task — handle inline
+                let handled = match app.screen {
+                    Screen::AiChat => {
+                        if app.ai_focus_results {
+                            // Focus on results list — typing switches to chat
+                            match key.code {
+                                KeyCode::Up => nav_up(&mut app.ai_state, app.ai_results.len()),
+                                KeyCode::Down => nav_down(&mut app.ai_state, app.ai_results.len()),
+                                KeyCode::Enter => app.ai_play_selected(),
+                                KeyCode::Char('d') => {
+                                    if let Some(idx) = app.ai_state.selected() {
+                                        if idx < app.ai_results.len() {
+                                            app.open_detail(app.ai_results[idx].channel_idx);
+                                        }
+                                    }
+                                }
+                                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    app.ai_focus_results = false;
+                                    app.ai_query.push(c);
+                                }
+                                KeyCode::Backspace => { app.ai_focus_results = false; }
+                                KeyCode::Tab => { app.ai_focus_results = false; }
+                                KeyCode::Esc => { app.ai_loading = false; app.screen = Screen::MainMenu; }
+                                _ => {}
+                            }
+                        } else {
+                            // Focus on chat input
+                            match key.code {
+                                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => { app.ai_query.push(c); }
+                                KeyCode::Backspace => { app.ai_query.pop(); }
+                                KeyCode::Enter => {
+                                    if !app.ai_query.is_empty() && !app.ai_loading {
+                                        let msg = app.ai_query.drain(..).collect::<String>();
+                                        app.ai_chat_history.push(ai::ChatMsg {
+                                            is_user: true,
+                                            text: msg.clone(),
+                                        });
+                                        app.ai_loading = true;
+                                        app.ai_chat_scroll = 0;
+                                        let client = http_client.clone();
+                                        let history = app.ai_chat_history.clone();
+                                        let context = ai::build_context(&app.data, &app.config.history, &app.data.channels);
+                                        ai_task = Some(tokio::spawn(async move {
+                                            ai::ai_chat(&client, &history[..history.len()-1], &msg, &context).await
+                                        }));
+                                    }
+                                }
+                                KeyCode::Tab => {
+                                    if !app.ai_results.is_empty() {
+                                        app.ai_focus_results = true;
+                                    }
+                                }
+                                KeyCode::Esc => { app.ai_loading = false; app.screen = Screen::MainMenu; }
+                                _ => {}
+                            }
+                        }
+                        true
+                    }
+                    _ => false,
+                };
+                if !handled {
+                    handle_key(&mut app, key).await;
+                }
                 app.needs_redraw = true;
             }
         }
@@ -198,7 +287,14 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     app.d_state.select(Some(0));
                     app.screen = Screen::LocalList;
                 }
-                3 => app.screen = Screen::LinkInput,
+                3 => {
+                    app.ai_query.clear();
+                    app.ai_results.clear();
+                    app.ai_chat_history.clear();
+                    app.ai_focus_results = false;
+                    app.ai_chat_scroll = 0;
+                    app.screen = Screen::AiChat;
+                }
                 4 => {
                     app.fav_state.select(Some(0));
                     app.screen = Screen::Favorites;
@@ -382,6 +478,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Esc => app.screen = Screen::ChanList,
             _ => {}
         },
+
+        Screen::AiChat => {} // Handled in main loop
 
         Screen::LocalList | Screen::LinkInput => {
             if key.code == KeyCode::Esc { app.screen = Screen::MainMenu; }
