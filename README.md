@@ -58,6 +58,7 @@ Supports two LLM providers — **DeepSeek V3** (~$0.001/query) and **Google Gemi
 - Smart TV assistant powered by **DeepSeek V3** or **Google Gemini 2.5 Flash** (switchable in Settings)
 - **Context-aware**: feeds current EPG across channels + your viewing history to the LLM
 - Auto-extracts keywords from AI response and searches EPG in real-time
+- **Customizable system prompt** — edit `~/.config/neon-iptv/ai_prompt.md` to tune AI behavior without rebuilding
 - Split-screen UI: search results (top) + chat (bottom)
 - Cost: ~$0.001 per query (DeepSeek V3) / free tier available (Gemini)
 
@@ -143,6 +144,7 @@ ip_tv --debug       # Launch with debug logging to /tmp/neon_iptv.log
 | Path | Description |
 |------|-------------|
 | `~/.config/neon-iptv/config.json` | Main config (URLs, theme, favorites, history) |
+| `~/.config/neon-iptv/ai_prompt.md` | AI system prompt (editable, auto-created on first AI use) |
 | `~/.cache/neon-iptv/data.bin` | Binary data cache (channels, EPG, radio) |
 | `/tmp/neon_iptv.log` | Debug log (only with `--debug`) |
 | `/tmp/neon_mpv.log` | MPV log (only with `--debug`) |
@@ -232,6 +234,10 @@ GEMINI_API_KEY="your-api-key-here"
 ```
 
 Switch between providers in Settings → AI Provider (press Enter to toggle).
+
+#### Custom System Prompt
+
+The AI behavior is controlled by `~/.config/neon-iptv/ai_prompt.md`. Edit this file to customize how the AI responds — no rebuild needed. If the file doesn't exist, a built-in default is used.
 
 Without any API key, all other features work normally — AI Chat will show an error message when accessed.
 

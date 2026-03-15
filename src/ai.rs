@@ -144,7 +144,7 @@ struct GeminiRespPart {
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT: &str = "\
+const DEFAULT_PROMPT: &str = "\
 Ты — NEON AI, персональный ТВ-ассистент и эксперт по кино/сериалам.
 
 КАК РАБОТАЕТ ПОИСК:
@@ -158,14 +158,20 @@ const SYSTEM_PROMPT: &str = "\
 2. ВСЕГДА добавляй KEYWORDS когда пользователь ищет, просит подборку или рекомендацию.
 3. Формат последней строки: KEYWORDS: слово1, слово2, слово3, слово4, слово5
    - Для жанровых запросов: ключевые слова жанра + 5-10 известных названий фильмов этого жанра.
-     Пример (ужасы): KEYWORDS: ужас, хоррор, зомби, обитель зла, пила, астрал, заклятие, крик, оно, сияние
    - Для конкретных запросов: названия фильмов (русские И оригинальные).
-     Пример: KEYWORDS: интерстеллар, interstellar, начало, inception
    - Чем БОЛЬШЕ keywords — тем лучше поиск. Давай 5-15 штук.
 4. НЕ используй слишком общие слова (фильм, сериал, кино, лучший, канал, рейтинг).
 5. Если пользователь просто общается (не ищет контент) — НЕ добавляй KEYWORDS.
 6. Учитывай HISTORY для персональных рекомендаций.
-7. NOW_PLAYING — справка о текущем эфире. Используй для ответов 'что сейчас идёт'.";
+7. NOW_PLAYING — справка о текущем эфире. Используй для ответов 'что сейчас идёт'.
+8. Ты ЭКСПЕРТ по кино и сериалам. Используй свои знания о рейтингах, актёрах, режиссёрах, жанрах, наградах.";
+
+/// Load system prompt from ~/.config/neon-iptv/ai_prompt.md (fallback to built-in default)
+pub fn load_system_prompt() -> String {
+    let path = crate::consts::get_config_dir().join("ai_prompt.md");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| DEFAULT_PROMPT.to_string())
+}
 
 // ─── Context Builder ─────────────────────────────────────────────────────────
 
@@ -217,10 +223,11 @@ pub async fn ai_chat(
     context: &str,
     provider: LlmProvider,
 ) -> AiChatResponse {
+    let prompt = load_system_prompt();
     let system_content = if context.is_empty() {
-        SYSTEM_PROMPT.to_string()
+        prompt
     } else {
-        format!("{}\n\n{}", SYSTEM_PROMPT, context)
+        format!("{}\n\n{}", prompt, context)
     };
 
     let full_text = match provider {
