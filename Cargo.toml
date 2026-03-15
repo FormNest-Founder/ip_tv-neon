@@ -2,6 +2,11 @@
 name = "ip_tv-neon"
 version = "0.8.2"
 edition = "2021"
+description = "Terminal IPTV & Radio player with EPG, timeshift, and AI assistant"
+license = "MIT"
+readme = "README.md"
+keywords = ["iptv", "tui", "radio", "epg", "terminal"]
+categories = ["command-line-utilities", "multimedia"]
 
 [dependencies]
 anyhow = "1.0"
