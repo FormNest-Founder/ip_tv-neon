@@ -278,12 +278,16 @@ pub fn get_current_epg(ch: &Channel, data: &AppData, now: i64) -> Option<EpgProg
 
 // ─── Local Playlist Scanner ──────────────────────────────────────────────────
 
-pub fn scan_local_playlists() -> Vec<PathBuf> {
+pub fn scan_local_playlists(custom_dir: &str) -> Vec<PathBuf> {
     let mut res = Vec::new();
-    let scan_dirs: Vec<PathBuf> = [dirs::home_dir(), dirs::download_dir(), dirs::video_dir()]
-        .into_iter()
-        .flatten()
-        .collect();
+    let scan_dirs: Vec<PathBuf> = if custom_dir.is_empty() {
+        [dirs::home_dir(), dirs::download_dir(), dirs::video_dir()]
+            .into_iter()
+            .flatten()
+            .collect()
+    } else {
+        vec![PathBuf::from(custom_dir)]
+    };
     for dir in scan_dirs {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {

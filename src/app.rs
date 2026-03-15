@@ -352,8 +352,10 @@ impl App {
                     .map(|p| p.3.to_string())
                     .unwrap_or_else(|| format!("({},{},{})", c.0, c.1, c.2))
             }
-            5 => format!("{} entries", self.config.history.len()),
-            6 => format!("{} entries", self.config.favorites.len()),
+            5 => { let p = crate::ai::LlmProvider::from_str(&self.config.llm_provider); p.name().into() },
+            6 => if self.config.local_dir.is_empty() { "~/  ~/Downloads  ~/Videos".into() } else { self.config.local_dir.clone() },
+            7 => format!("{} entries", self.config.history.len()),
+            8 => format!("{} entries", self.config.favorites.len()),
             _ => String::new(),
         }
     }
@@ -363,6 +365,7 @@ impl App {
             0 => self.config.playlist_url = val.to_string(),
             1 => self.config.epg_url = val.to_string(),
             3 => self.config.video_geometry = val.to_string(),
+            6 => self.config.local_dir = val.to_string(),
             _ => {}
         }
         let _ = self.config.save();
@@ -380,8 +383,13 @@ impl App {
                 self.config.theme_color = (p.0, p.1, p.2);
                 let _ = self.config.save();
             }
-            5 => { self.config.history.clear(); let _ = self.config.save(); self.status_msg = Some("History cleared".into()); }
-            6 => { self.config.favorites.clear(); let _ = self.config.save(); self.status_msg = Some("Favorites cleared".into()); }
+            5 => {
+                let cur = crate::ai::LlmProvider::from_str(&self.config.llm_provider);
+                self.config.llm_provider = cur.next().name().to_lowercase().to_string();
+                let _ = self.config.save();
+            }
+            7 => { self.config.history.clear(); let _ = self.config.save(); self.status_msg = Some("History cleared".into()); }
+            8 => { self.config.favorites.clear(); let _ = self.config.save(); self.status_msg = Some("Favorites cleared".into()); }
             _ => {}
         }
     }

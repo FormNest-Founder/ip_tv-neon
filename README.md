@@ -2,7 +2,7 @@
 
 **Ask your TV "what comedies are on tonight?" and get results you can play with one keypress.**
 
-NEON IPTV is a 2400-line Rust TUI that combines an IPTV/Radio player with a live LLM assistant. The AI sees your full EPG (thousands of programs across hundreds of channels), understands your viewing history, and finds exactly what you want — in natural language, in under 2 seconds.
+NEON IPTV is a 2700-line Rust TUI that combines an IPTV/Radio player with a live LLM assistant. The AI sees your full EPG (thousands of programs across hundreds of channels), understands your viewing history, and finds exactly what you want — in natural language, in under 2 seconds.
 
 No Electron. No browser. No 500MB RAM for a channel list. Just a 4.3MB static binary, 15MB RSS, and mpv doing what mpv does best.
 
@@ -19,7 +19,7 @@ This isn't a chatbot bolted onto a player. The LLM is wired into the EPG search 
 
 ![AI Chat — natural language search across all channels](screenshots/ai_chat.png)
 
-The AI costs ~$0.001 per query (DeepSeek V3). Without an API key, everything else works normally.
+Supports two LLM providers — **DeepSeek V3** (~$0.001/query) and **Google Gemini 2.5 Flash** (free tier available). Switch between them in Settings with one keypress. Without an API key, everything else works normally.
 
 ## Why Rust + mpv
 
@@ -42,23 +42,24 @@ The AI costs ~$0.001 per query (DeepSeek V3). Without an API key, everything els
 ## Features
 
 ### IPTV
-- **Channel browser** — categories with channel counts, real-time search
+- **Channel browser** — categories with contextual icons (country flags, content type icons) and channel counts
 - **EPG integration** — current program with live progress bar (gradient green → yellow → red)
 - **TimeShift / Archive** — playback past programs via catchup URLs (`tvg-rec` days auto-detection)
 - **Channel markers** — `★` favorites, `⏪` archive-capable channels
 - **Detail screen** — full EPG schedule with times, descriptions, current program highlight
+- **Theme-consistent UI** — accent color applied to category browser, favorites, history, settings, local playlists
 
 ### Radio
-- **Radio Record** stations with genre categories
+- **Radio Record** stations with genre categories and contextual icons
 - **Now Playing** — async track info fetch (artist — song), non-blocking
 - Background playback — TUI stays interactive while radio plays
 
 ### AI Chat (optional)
-- Smart TV assistant powered by DeepSeek API (or any OpenAI-compatible endpoint)
+- Smart TV assistant powered by **DeepSeek V3** or **Google Gemini 2.5 Flash** (switchable in Settings)
 - **Context-aware**: feeds current EPG across channels + your viewing history to the LLM
 - Auto-extracts keywords from AI response and searches EPG in real-time
 - Split-screen UI: search results (top) + chat (bottom)
-- Cost: ~$0.001 per query (DeepSeek V3 pricing)
+- Cost: ~$0.001 per query (DeepSeek V3) / free tier available (Gemini)
 
 ### Video Playback
 - **mpv** as an external player — your config, your shaders, your hwdec
@@ -68,17 +69,18 @@ The AI costs ~$0.001 per query (DeepSeek V3). Without an API key, everything els
 - Radio: mpv runs in background (`--no-video`), TUI stays interactive
 
 ### Performance
-- **4.3MB** fat LTO binary (Clang + LLD, target-cpu optimized)
+- **4.3MB** fat LTO binary (Clang + LLD, target-cpu optimized, codegen-units=1, strip=symbols)
 - **~15MB RSS** — no Electron, no WebView, no garbage collector
 - **Instant startup** — versioned binary cache (bincode), no re-parsing on launch
-- **Non-blocking I/O** — async everything: HTTP fetches, mpv management, track info, AI chat
+- **Non-blocking I/O** — async everything: HTTP fetches, mpv management, track info, AI chat, data updates
 - **Zero-copy XML parsing** — EPG parsed with `quick-xml` enum-based state machine, no String allocations in hot path
 
 ### Other
 - **Favorites** — persistent set, toggle with `f`
 - **History** — last 200 watched streams (deduplicated)
-- **Local playlists** — scans `~/`, `~/Downloads/`, `~/Videos/` for `.m3u`/`.m3u8` files
+- **Local playlists** — scans configurable directory (or default `~/`, `~/Downloads/`, `~/Videos/`) for `.m3u`/`.m3u8` files
 - **7 color themes** — Cyan, Magenta, Neon Green, Orange, Purple, Yellow, Red
+- **Contextual icons** — ~40 country flags for IPTV categories, ~25 genre icons for radio
 - **Panic hook** — terminal is always restored on crash
 - **Diagnostics** — `ip_tv diag` shows all paths, URLs, cache state
 
@@ -88,7 +90,8 @@ The AI costs ~$0.001 per query (DeepSeek V3). Without an API key, everything els
 - **mpv** — media player (`pacman -S mpv` / `apt install mpv`)
 - **Rust toolchain** — for building from source
 - **niri** (optional) — Wayland compositor for suspended video mode. Without niri, video plays without TUI hiding
-- **DeepSeek API key** (optional) — for AI Chat feature
+- **DeepSeek API key** (optional) — for AI Chat with DeepSeek provider
+- **Gemini API key** (optional) — for AI Chat with Google Gemini provider
 
 ## Installation
 
@@ -160,7 +163,9 @@ Created automatically on first run. You can edit it manually or via the in-app S
   "favorites": [],
   "history": [],
   "video_fullscreen": true,
-  "video_geometry": "1280x720"
+  "video_geometry": "1280x720",
+  "local_dir": "",
+  "llm_provider": ""
 }
 ```
 
@@ -173,6 +178,22 @@ Created automatically on first run. You can edit it manually or via the in-app S
 | `history` | string[] | Last 200 watched stream URLs (auto-managed) |
 | `video_fullscreen` | bool | Launch mpv in fullscreen mode |
 | `video_geometry` | string | Window size when fullscreen is off (e.g. `"1920x1080"`) |
+| `local_dir` | string | Custom directory for local `.m3u`/`.m3u8` files. Empty = scan default dirs |
+| `llm_provider` | string | AI provider: `"deepseek"` (default) or `"gemini"` |
+
+### Settings Screen
+
+| # | Setting | Type | Description |
+|---|---------|------|-------------|
+| 1 | Playlist URL | edit | M3U/M3U8 playlist source |
+| 2 | EPG URL | edit | XMLTV EPG source |
+| 3 | Fullscreen | toggle | mpv fullscreen on/off |
+| 4 | Window Geometry | edit | mpv window size (e.g. `1280x720`) |
+| 5 | Theme | toggle | Cycle through 7 color presets |
+| 6 | AI Provider | toggle | Switch between DeepSeek and Gemini |
+| 7 | Local Playlists Dir | edit | Directory to scan for local `.m3u` files |
+| 8 | Clear History | action | Delete all history entries |
+| 9 | Clear Favorites | action | Delete all favorites |
 
 ### Theme Presets
 
@@ -188,7 +209,9 @@ Created automatically on first run. You can edit it manually or via the in-app S
 
 ### AI Chat Setup (optional)
 
-The AI Chat feature uses [DeepSeek API](https://platform.deepseek.com/) (`deepseek-chat` model).
+The AI Chat feature supports two providers. Configure one or both:
+
+#### DeepSeek (default)
 
 1. Get an API key at https://platform.deepseek.com/
 2. Set the environment variable:
@@ -198,7 +221,19 @@ The AI Chat feature uses [DeepSeek API](https://platform.deepseek.com/) (`deepse
 export DEEPSEEK_API_KEY="sk-your-key-here"
 ```
 
-Without the key, all other features work normally — AI Chat will show an error message when accessed.
+#### Google Gemini
+
+1. Get an API key at https://aistudio.google.com/apikey
+2. Add to system environment:
+
+```bash
+# /etc/environment (system-wide) or shell profile
+GEMINI_API_KEY="your-api-key-here"
+```
+
+Switch between providers in Settings → AI Provider (press Enter to toggle).
+
+Without any API key, all other features work normally — AI Chat will show an error message when accessed.
 
 ## Playlist Format
 
@@ -223,7 +258,7 @@ http://another.stream/live
 
 Playlists can be loaded from:
 - **HTTP/HTTPS URL** — set in config or Settings
-- **Local file** — set path in Playlist URL, or use the Local Playlists screen (scans `~/`, `~/Downloads/`, `~/Videos/`)
+- **Local file** — set path in Playlist URL, or use the Local Playlists screen (scans configured directory or defaults)
 
 ## EPG Format
 
@@ -296,16 +331,16 @@ EPG channels are matched to playlist channels by `tvg-id` first, then by normali
 
 ```
 src/
-├── main.rs     505 lines  Event loop, async tasks, key handling, suspended mode
-├── ui.rs       702 lines  Screen rendering (ratatui widgets, themes, layout)
-├── app.rs      370 lines  App state, mpv launch, filters, navigation
-├── ai.rs       336 lines  DeepSeek chat, EPG context, keyword extraction
-├── epg.rs      282 lines  M3U/EPG/radio parsing, XML parser, cache
-├── models.rs   151 lines  Data structures (Config, Channel, Screen, AppData)
+├── main.rs     533 lines  Event loop, async tasks, key handling, suspended mode
+├── ui.rs       826 lines  Screen rendering (ratatui widgets, themes, icons, layout)
+├── app.rs      396 lines  App state, mpv launch, filters, navigation
+├── ai.rs       456 lines  LLM chat (DeepSeek + Gemini), EPG context, keyword extraction
+├── epg.rs      300 lines  M3U/EPG/radio parsing, XML parser, cache, local scanning
+├── models.rs   159 lines  Data structures (Config, Channel, Screen, AppData)
 ├── utils.rs     28 lines  Normalize, XML time parser, logging
 └── consts.rs    27 lines  Constants, XDG paths, API endpoints
                 ──────
-                ~2500 lines total
+                ~2725 lines total
 ```
 
 ### Data Flow
@@ -324,6 +359,22 @@ Radio API           ──→  epg.rs (fetch)  ──→  AppData.radio
                                          mpv (external player)
 ```
 
+### AI Pipeline
+
+```
+User query ──→ LLM (DeepSeek or Gemini)
+                    ↓
+              system prompt (EPG summary + history)
+                    ↓
+              AI response + extracted keywords
+                    ↓
+              TF-IDF search across all EPG programs
+                    ↓
+              ranked results (live > future > archive)
+                    ↓
+              select + Enter → mpv playback
+```
+
 ## Tech Stack
 
 | Component | Crate/Tool | Purpose |
@@ -335,9 +386,11 @@ Radio API           ──→  epg.rs (fetch)  ──→  AppData.radio
 | Compression | `flate2` | Gzip EPG decompression |
 | Serialization | `bincode` + `serde` | Binary cache, JSON config |
 | Regex | `regex` | M3U attribute parsing |
+| Time | `chrono` | EPG time parsing, UTC operations |
 | Media player | `mpv` (external) | Stream playback |
-| AI | DeepSeek V3 API | TV assistant (optional) |
-| Build | Clang + LLD | Fat LTO, target-cpu optimized |
+| AI (option 1) | DeepSeek V3 API | TV assistant |
+| AI (option 2) | Gemini 2.5 Flash API | TV assistant |
+| Build | Clang + LLD | Fat LTO, codegen-units=1, strip=symbols |
 
 ## Troubleshooting
 
@@ -361,8 +414,9 @@ Radio API           ──→  epg.rs (fetch)  ──→  AppData.radio
 - Cache auto-resets when the app version changes
 
 ### AI Chat shows error
-- Set `DEEPSEEK_API_KEY` environment variable
-- Verify key works: `curl -H "Authorization: Bearer $DEEPSEEK_API_KEY" https://api.deepseek.com/v1/models`
+- **DeepSeek:** Set `DEEPSEEK_API_KEY` environment variable. Verify: `curl -H "Authorization: Bearer $DEEPSEEK_API_KEY" https://api.deepseek.com/v1/models`
+- **Gemini:** Set `GEMINI_API_KEY` environment variable. Verify: `curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY"`
+- Switch provider in Settings → AI Provider if one isn't working
 
 ## About
 

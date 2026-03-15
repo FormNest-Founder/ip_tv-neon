@@ -17,6 +17,10 @@ pub struct Config {
     pub video_fullscreen: bool,
     #[serde(default = "default_geometry")]
     pub video_geometry: String,
+    #[serde(default)]
+    pub local_dir: String,
+    #[serde(default)]
+    pub llm_provider: String,
 }
 
 fn default_fullscreen() -> bool { true }
@@ -32,6 +36,8 @@ impl Default for Config {
             history: Vec::new(),
             video_fullscreen: true,
             video_geometry: "1280x720".into(),
+            local_dir: String::new(),
+            llm_provider: String::new(),
         }
     }
 }
@@ -129,13 +135,15 @@ pub enum Screen {
     AiChat,
 }
 
-pub const SETTINGS_COUNT: usize = 7;
+pub const SETTINGS_COUNT: usize = 9;
 pub const SETTINGS_LABELS: [&str; SETTINGS_COUNT] = [
     "Playlist URL",
     "EPG URL",
     "Fullscreen",
     "Window Geometry",
     "Theme",
+    "AI Provider",
+    "Local Playlists Dir",
     "Clear History",
     "Clear Favorites",
 ];

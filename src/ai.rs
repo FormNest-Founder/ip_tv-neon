@@ -31,7 +31,38 @@ pub struct AiChatResponse {
     pub keywords: Option<Vec<String>>,
 }
 
-// ─── API Types ───────────────────────────────────────────────────────────────
+// ─── LLM Provider ───────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum LlmProvider {
+    DeepSeek,
+    Gemini,
+}
+
+impl LlmProvider {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::DeepSeek => "DeepSeek",
+            Self::Gemini => "Gemini",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::DeepSeek => Self::Gemini,
+            Self::Gemini => Self::DeepSeek,
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "gemini" => Self::Gemini,
+            _ => Self::DeepSeek,
+        }
+    }
+}
+
+// ─── API Types (OpenAI-compatible: DeepSeek) ────────────────────────────────
 
 #[derive(Serialize)]
 struct ApiMessage {
@@ -60,6 +91,55 @@ struct ApiMsgResp {
 #[derive(Deserialize)]
 struct ApiResponse {
     choices: Vec<ApiChoice>,
+}
+
+// ─── API Types (Gemini) ─────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct GeminiContent {
+    role: String,
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Serialize)]
+struct GeminiPart {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct GeminiRequest {
+    contents: Vec<GeminiContent>,
+    #[serde(rename = "systemInstruction")]
+    system_instruction: GeminiContent,
+    #[serde(rename = "generationConfig")]
+    generation_config: GeminiGenConfig,
+}
+
+#[derive(Serialize)]
+struct GeminiGenConfig {
+    temperature: f32,
+    #[serde(rename = "maxOutputTokens")]
+    max_output_tokens: u32,
+}
+
+#[derive(Deserialize)]
+struct GeminiResponse {
+    candidates: Option<Vec<GeminiCandidate>>,
+}
+
+#[derive(Deserialize)]
+struct GeminiCandidate {
+    content: Option<GeminiRespContent>,
+}
+
+#[derive(Deserialize)]
+struct GeminiRespContent {
+    parts: Option<Vec<GeminiRespPart>>,
+}
+
+#[derive(Deserialize)]
+struct GeminiRespPart {
+    text: Option<String>,
 }
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
@@ -129,99 +209,118 @@ pub fn build_context(data: &AppData, config_history: &[String], channels: &[Chan
 
 // ─── AI Chat ─────────────────────────────────────────────────────────────────
 
-/// Full chat with DeepSeek — returns response text + optional search keywords
+/// Chat with LLM (DeepSeek or Gemini) — returns response text + optional search keywords
 pub async fn ai_chat(
     client: &Client,
     history: &[ChatMsg],
     user_msg: &str,
     context: &str,
+    provider: LlmProvider,
 ) -> AiChatResponse {
-    let api_key = match std::env::var("DEEPSEEK_API_KEY") {
-        Ok(k) if !k.is_empty() => k,
-        _ => return AiChatResponse {
-            text: "Error: DEEPSEEK_API_KEY not set in /etc/environment".into(),
-            keywords: None,
-        },
-    };
-
-    // Build system message with context
     let system_content = if context.is_empty() {
         SYSTEM_PROMPT.to_string()
     } else {
         format!("{}\n\n{}", SYSTEM_PROMPT, context)
     };
 
-    let mut messages = vec![ApiMessage {
-        role: "system".into(),
-        content: system_content,
-    }];
+    let full_text = match provider {
+        LlmProvider::DeepSeek => chat_deepseek(client, history, user_msg, &system_content).await,
+        LlmProvider::Gemini => chat_gemini(client, history, user_msg, &system_content).await,
+    };
 
-    // Add conversation history (last 10 messages to save tokens)
-    let skip = if history.len() > 10 { history.len() - 10 } else { 0 };
+    let full_text = match full_text {
+        Ok(t) => t,
+        Err(e) => return AiChatResponse { text: e, keywords: None },
+    };
+
+    let (display_text, keywords) = extract_keywords(&full_text);
+    AiChatResponse { text: display_text, keywords }
+}
+
+async fn chat_deepseek(client: &Client, history: &[ChatMsg], user_msg: &str, system: &str) -> Result<String, String> {
+    let api_key = std::env::var("DEEPSEEK_API_KEY")
+        .ok().filter(|k| !k.is_empty())
+        .ok_or("DEEPSEEK_API_KEY not set in /etc/environment")?;
+
+    let mut messages = vec![ApiMessage { role: "system".into(), content: system.into() }];
+    let skip = history.len().saturating_sub(10);
     for msg in &history[skip..] {
         messages.push(ApiMessage {
             role: if msg.is_user { "user" } else { "assistant" }.into(),
             content: msg.text.clone(),
         });
     }
+    messages.push(ApiMessage { role: "user".into(), content: user_msg.into() });
 
-    messages.push(ApiMessage {
-        role: "user".into(),
-        content: user_msg.into(),
-    });
-
-    let body = ApiRequest {
-        model: "deepseek-chat",
-        messages,
-        temperature: 0.7,
-    };
-
-    let resp = match client
-        .post("https://api.deepseek.com/v1/chat/completions")
+    let body = ApiRequest { model: "deepseek-chat", messages, temperature: 0.7 };
+    let resp = client.post("https://api.deepseek.com/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
         .timeout(std::time::Duration::from_secs(30))
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return AiChatResponse {
-            text: format!("Network error: {}", e),
-            keywords: None,
-        },
-    };
+        .json(&body).send().await
+        .map_err(|e| format!("Network error: {}", e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return AiChatResponse {
-            text: format!("API error {}: {}", status, &body[..body.len().min(200)]),
-            keywords: None,
-        };
+        return Err(format!("API error {}: {}", status, &body[..body.len().min(200)]));
     }
 
-    let parsed: ApiResponse = match resp.json().await {
-        Ok(p) => p,
-        Err(e) => return AiChatResponse {
-            text: format!("Parse error: {}", e),
-            keywords: None,
+    let parsed: ApiResponse = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    Ok(parsed.choices.first()
+        .and_then(|c| c.message.content.as_ref()).cloned()
+        .unwrap_or_else(|| "No response".into()))
+}
+
+async fn chat_gemini(client: &Client, history: &[ChatMsg], user_msg: &str, system: &str) -> Result<String, String> {
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .ok().filter(|k| !k.is_empty())
+        .ok_or("GEMINI_API_KEY not set in /etc/environment")?;
+
+    let mut contents = Vec::new();
+    let skip = history.len().saturating_sub(10);
+    for msg in &history[skip..] {
+        contents.push(GeminiContent {
+            role: if msg.is_user { "user" } else { "model" }.into(),
+            parts: vec![GeminiPart { text: msg.text.clone() }],
+        });
+    }
+    contents.push(GeminiContent {
+        role: "user".into(),
+        parts: vec![GeminiPart { text: user_msg.into() }],
+    });
+
+    let body = GeminiRequest {
+        contents,
+        system_instruction: GeminiContent {
+            role: "user".into(),
+            parts: vec![GeminiPart { text: system.into() }],
         },
+        generation_config: GeminiGenConfig { temperature: 0.7, max_output_tokens: 2048 },
     };
 
-    let full_text = parsed
-        .choices
-        .first()
-        .and_then(|c| c.message.content.as_ref())
-        .cloned()
-        .unwrap_or_else(|| "No response".into());
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
+        api_key
+    );
+    let resp = client.post(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .json(&body).send().await
+        .map_err(|e| format!("Network error: {}", e))?;
 
-    // Extract KEYWORDS line if present
-    let (display_text, keywords) = extract_keywords(&full_text);
-
-    AiChatResponse {
-        text: display_text,
-        keywords,
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Gemini API error {}: {}", status, &body[..body.len().min(200)]));
     }
+
+    let parsed: GeminiResponse = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    Ok(parsed.candidates.as_ref()
+        .and_then(|c| c.first())
+        .and_then(|c| c.content.as_ref())
+        .and_then(|c| c.parts.as_ref())
+        .and_then(|p| p.first())
+        .and_then(|p| p.text.as_ref()).cloned()
+        .unwrap_or_else(|| "No response".into()))
 }
 
 // ─── Keywords Extraction ─────────────────────────────────────────────────────

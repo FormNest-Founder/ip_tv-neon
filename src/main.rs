@@ -236,8 +236,9 @@ async fn main() -> Result<()> {
                                         let client = http_client.clone();
                                         let history = app.ai_chat_history.clone();
                                         let context = ai::build_context(&app.data, &app.config.history, &app.data.channels);
+                                        let provider = ai::LlmProvider::from_str(&app.config.llm_provider);
                                         ai_task = Some(tokio::spawn(async move {
-                                            ai::ai_chat(&client, &history[..history.len()-1], &msg, &context).await
+                                            ai::ai_chat(&client, &history[..history.len()-1], &msg, &context, provider).await
                                         }));
                                     }
                                 }
@@ -308,7 +309,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                 0 => app.screen = Screen::CatList,
                 1 => app.screen = Screen::RadioCatList,
                 2 => {
-                    app.local_files = scan_local_playlists();
+                    app.local_files = scan_local_playlists(&app.config.local_dir);
                     app.d_state.select(Some(0));
                     app.screen = Screen::LocalList;
                 }
@@ -463,8 +464,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Enter => {
                 let idx = app.set_state.selected().unwrap_or(0);
                 match idx {
-                    0 | 1 | 3 => { app.edit_buf = app.settings_value(idx); app.screen = Screen::SettingsEdit(idx); }
-                    2 | 4 | 5 | 6 => { app.settings_toggle(idx); }
+                    0 | 1 | 3 | 6 => { app.edit_buf = app.settings_value(idx); app.screen = Screen::SettingsEdit(idx); }
+                    2 | 4 | 5 | 7 | 8 => { app.settings_toggle(idx); }
                     _ => {}
                 }
             }

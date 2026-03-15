@@ -16,6 +16,100 @@ pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel]) -> &'a str {
         .unwrap_or(url)
 }
 
+// ─── Category Icons ─────────────────────────────────────────────────────────
+
+fn category_icon(name: &str) -> &'static str {
+    let n = name.to_lowercase();
+    // Countries & regions
+    if n.contains("usa") || n.contains("сша") || n.contains("america") { return "🇺🇸"; }
+    if n.contains("belarus") || n.contains("белар") { return "🇧🇾"; }
+    if n.contains("russia") || n.contains("росси") || n.contains("рф") { return "🇷🇺"; }
+    if n.contains("ukrain") || n.contains("украин") { return "🇺🇦"; }
+    if n.contains("kazakh") || n.contains("казах") { return "🇰🇿"; }
+    if n.contains("uk ") || n.starts_with("uk") || n.contains("british") || n.contains("англ") { return "🇬🇧"; }
+    if n.contains("german") || n.contains("немец") || n.contains("deutsch") { return "🇩🇪"; }
+    if n.contains("france") || n.contains("франц") || n.contains("french") { return "🇫🇷"; }
+    if n.contains("italy") || n.contains("итал") || n.contains("italian") { return "🇮🇹"; }
+    if n.contains("spain") || n.contains("испан") || n.contains("spanish") { return "🇪🇸"; }
+    if n.contains("turkey") || n.contains("турц") || n.contains("türk") { return "🇹🇷"; }
+    if n.contains("india") || n.contains("инди") || n.contains("hindi") { return "🇮🇳"; }
+    if n.contains("china") || n.contains("кита") || n.contains("chinese") { return "🇨🇳"; }
+    if n.contains("japan") || n.contains("япон") { return "🇯🇵"; }
+    if n.contains("korea") || n.contains("коре") { return "🇰🇷"; }
+    if n.contains("arab") || n.contains("араб") { return "🇸🇦"; }
+    if n.contains("israel") || n.contains("израил") { return "🇮🇱"; }
+    if n.contains("poland") || n.contains("поль") || n.contains("polsk") { return "🇵🇱"; }
+    if n.contains("czech") || n.contains("чеш") { return "🇨🇿"; }
+    if n.contains("canada") || n.contains("канад") { return "🇨🇦"; }
+    if n.contains("brazil") || n.contains("бразил") { return "🇧🇷"; }
+    if n.contains("georgia") || n.contains("грузи") { return "🇬🇪"; }
+    if n.contains("armenia") || n.contains("армен") { return "🇦🇲"; }
+    if n.contains("azerbai") || n.contains("азерб") { return "🇦🇿"; }
+    if n.contains("uzbek") || n.contains("узбек") { return "🇺🇿"; }
+    if n.contains("moldov") || n.contains("молдов") { return "🇲🇩"; }
+    if n.contains("latin") || n.contains("латин") { return "🌎"; }
+    if n.contains("europe") || n.contains("европ") { return "🌍"; }
+    if n.contains("asia") || n.contains("азия") { return "🌏"; }
+    if n.contains("internat") || n.contains("междунар") || n.contains("world") || n.contains("мир") { return "🌐"; }
+    // Content types
+    if n.contains("кино") || n.contains("фильм") || n.contains("movie") || n.contains("cinema") { return "🎬"; }
+    if n.contains("сериал") || n.contains("series") { return "🎭"; }
+    if n.contains("мульт") || n.contains("cartoon") || n.contains("kids") || n.contains("детск") || n.contains("child") { return "🧸"; }
+    if n.contains("спорт") || n.contains("sport") || n.contains("football") || n.contains("футбол") { return "⚽"; }
+    if n.contains("новост") || n.contains("news") { return "📰"; }
+    if n.contains("музык") || n.contains("music") { return "🎵"; }
+    if n.contains("наук") || n.contains("science") || n.contains("discovery") || n.contains("nat geo") { return "🔬"; }
+    if n.contains("document") || n.contains("докум") { return "📚"; }
+    if n.contains("образов") || n.contains("educat") { return "🎓"; }
+    if n.contains("религ") || n.contains("relig") || n.contains("духов") { return "🕊 "; }
+    if n.contains("эротик") || n.contains("adult") || n.contains("xxx") || n.contains("18+") { return "🔞"; }
+    if n.contains("travel") || n.contains("путеш") { return "✈ "; }
+    if n.contains("кулинар") || n.contains("cook") || n.contains("food") || n.contains("еда") { return "🍳"; }
+    if n.contains("fashion") || n.contains("мода") || n.contains("style") { return "👗"; }
+    if n.contains("humor") || n.contains("юмор") || n.contains("comedy") || n.contains("комед") { return "😂"; }
+    if n.contains("horror") || n.contains("ужас") { return "👻"; }
+    if n.contains("познав") || n.contains("develop") { return "💡"; }
+    if n.contains("shop") || n.contains("магаз") || n.contains("телемаг") { return "🛒"; }
+    if n.contains("radost") || n.contains("радост") { return "🌈"; }
+    if n.contains("retro") || n.contains("ретро") || n.contains("classic") || n.contains("классик") || n.contains("совет") { return "📽 "; }
+    if n.contains("hd") || n.contains("uhd") || n.contains("4k") { return "📺"; }
+    "📂"
+}
+
+fn radio_genre_icon(name: &str) -> &'static str {
+    let n = name.to_lowercase();
+    if n == "all" { return "📻"; }
+    if n.contains("bass") || n.contains("dubstep") || n.contains("drum") || n.contains("dnb") { return "🔊"; }
+    if n.contains("rock") || n.contains("metal") || n.contains("punk") || n.contains("grunge") { return "🎸"; }
+    if n.contains("pop") || n.contains("dance") || n.contains("disco") { return "🎤"; }
+    if n.contains("jazz") || n.contains("soul") || n.contains("blues") || n.contains("funk") { return "🎷"; }
+    if n.contains("classic") || n.contains("класси") || n.contains("orchestra") { return "🎻"; }
+    if n.contains("electro") || n.contains("techno") || n.contains("trance") || n.contains("house") || n.contains("edm") { return "🎧"; }
+    if n.contains("hip") || n.contains("rap") || n.contains("trap") || n.contains("phonk") { return "🎤"; }
+    if n.contains("chill") || n.contains("lounge") || n.contains("ambient") || n.contains("relax") { return "🌊"; }
+    if n.contains("reggae") || n.contains("ska") || n.contains("dub") { return "🌴"; }
+    if n.contains("country") || n.contains("folk") { return "🤠"; }
+    if n.contains("latin") || n.contains("salsa") || n.contains("reggaeton") { return "💃"; }
+    if n.contains("russian") || n.contains("русск") || n.contains("рус") { return "🇷🇺"; }
+    if n.contains("hit") || n.contains("top") || n.contains("best") || n.contains("gold") { return "🏆"; }
+    if n.contains("remix") || n.contains("mashup") || n.contains("mix") { return "🔀"; }
+    if n.contains("retro") || n.contains("80") || n.contains("90") || n.contains("70") || n.contains("old") { return "📼"; }
+    if n.contains("new") || n.contains("fresh") || n.contains("нов") { return "✨"; }
+    if n.contains("deep") { return "🌀"; }
+    if n.contains("pirate") { return "🏴‍☠️"; }
+    if n.contains("summer") { return "☀ "; }
+    if n.contains("party") || n.contains("club") { return "🪩"; }
+    if n.contains("vip") || n.contains("premium") { return "💎"; }
+    if n.contains("record") { return "⏺ "; }
+    if n.contains("chanson") || n.contains("шансон") { return "🎶"; }
+    if n.contains("naft") || n.contains("нафт") { return "💧"; }
+    if n.contains("big") { return "🔥"; }
+    if n.contains("melodi") || n.contains("мелоди") { return "🎵"; }
+    if n.contains("superdiskoteka") || n.contains("дискотека") { return "🪩"; }
+    if n.contains("humor") || n.contains("юмор") || n.contains("сказк") || n.contains("comedy") { return "😂"; }
+    "🎵"
+}
+
 // ─── Main Render Dispatch ────────────────────────────────────────────────────
 
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -75,11 +169,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 chunks[0],
             );
             let items = [
-                "  IPTV", "  RADIO", "  LOCAL", "  AI CHAT", "  FAVORITES",
-                "  HISTORY", "  STOP ALL", "  UPDATE", "  SETTINGS", "  EXIT",
+                "  📺  IPTV", "  📻  RADIO", "  📁  LOCAL", "  🤖  AI CHAT", "  ⭐  FAVORITES",
+                "  🕐  HISTORY", "  ⏹   STOP ALL", "  🔄  UPDATE", "  ⚙   SETTINGS", "  🚪  EXIT",
             ];
-            let list = List::new(items.map(ListItem::new))
-                .highlight_style(Style::default().bg(theme).fg(Color::Black));
+            let list = List::new(items.map(|s| ListItem::new(s).style(Style::default().fg(theme))))
+                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
             f.render_stateful_widget(list, chunks[1], &mut app.m_state);
             if let Some(msg) = &app.status_msg {
                 let color = if msg.starts_with("Update failed") { Color::Red } else { Color::Green };
@@ -99,15 +193,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .iter()
                 .map(|g| {
                     let cnt = app.data.group_counts.get(g).copied().unwrap_or(0);
-                    ListItem::new(format!("  {} ({})", g, cnt))
+                    ListItem::new(format!("  {}  {} ({})", category_icon(g), g, cnt))
+                        .style(Style::default().fg(theme))
                 })
                 .collect();
             let list = List::new(items)
-                .block(Block::default().title(" Categories ").borders(Borders::ALL))
+                .block(Block::default().title(" 📺 Categories ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(
                     Style::default()
-                        .bg(Color::Rgb(40, 0, 40))
-                        .fg(Color::Magenta)
+                        .bg(theme)
+                        .fg(Color::Black)
                         .bold(),
                 );
             f.render_stateful_widget(list, area, &mut app.cat_state);
@@ -207,15 +302,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     } else {
                         app.data.radio.iter().filter(|r| r.genres.contains(g)).count()
                     };
-                    ListItem::new(format!("  {} ({})", g, cnt))
+                    ListItem::new(format!("  {}  {} ({})", radio_genre_icon(g), g, cnt))
+                        .style(Style::default().fg(theme))
                 })
                 .collect();
             let list = List::new(items)
-                .block(Block::default().title(" Radio Genres ").borders(Borders::ALL))
+                .block(Block::default().title(" 📻 Radio Genres ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(
                     Style::default()
-                        .bg(Color::Rgb(40, 0, 40))
-                        .fg(Color::Magenta)
+                        .bg(theme)
+                        .fg(Color::Black)
                         .bold(),
                 );
             f.render_stateful_widget(list, area, &mut app.r_cat_state);
@@ -261,15 +357,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .iter()
                 .map(|url| {
                     let name = get_name_by_url(url, &app.data.channels);
-                    ListItem::new(format!("  {}", name))
+                    ListItem::new(format!("  ⭐  {}", name))
+                        .style(Style::default().fg(theme))
                 })
                 .collect();
             let list = List::new(items)
-                .block(Block::default().title(" Favorites ").borders(Borders::ALL))
+                .block(Block::default().title(" ⭐ Favorites ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(
                     Style::default()
-                        .bg(Color::Rgb(40, 40, 0))
-                        .fg(Color::Yellow)
+                        .bg(theme)
+                        .fg(Color::Black)
                         .bold(),
                 );
             f.render_stateful_widget(list, area, &mut app.fav_state);
@@ -283,15 +380,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .rev()
                 .map(|url| {
                     let name = get_name_by_url(url, &app.data.channels);
-                    ListItem::new(format!("  {}", name))
+                    ListItem::new(format!("  🕐  {}", name))
+                        .style(Style::default().fg(theme))
                 })
                 .collect();
             let list = List::new(items)
-                .block(Block::default().title(" History ").borders(Borders::ALL))
+                .block(Block::default().title(" 🕐 History ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(
                     Style::default()
-                        .bg(Color::Rgb(0, 0, 40))
-                        .fg(Color::Blue)
+                        .bg(theme)
+                        .fg(Color::Black)
                         .bold(),
                 );
             f.render_stateful_widget(list, area, &mut app.hist_state);
@@ -309,11 +407,19 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let items: Vec<ListItem> = app
                 .local_files
                 .iter()
-                .map(|p| ListItem::new(p.to_string_lossy().to_string()))
+                .map(|p| {
+                    ListItem::new(format!("  📄  {}", p.to_string_lossy()))
+                        .style(Style::default().fg(theme))
+                })
                 .collect();
+            let dir_label = if app.config.local_dir.is_empty() {
+                "~/".to_string()
+            } else {
+                app.config.local_dir.clone()
+            };
             let list = List::new(items)
-                .block(Block::default().title(" Local Playlists ").borders(Borders::ALL))
-                .highlight_style(Style::default().bg(Color::White).fg(Color::Black));
+                .block(Block::default().title(format!(" 📁 Local Playlists — {} ", dir_label)).borders(Borders::ALL).border_style(Style::default().fg(theme)))
+                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
             f.render_stateful_widget(list, area, &mut app.d_state);
         }
 
@@ -500,6 +606,8 @@ fn format_time(ts: i64) -> String {
 // ─── Settings Screen ─────────────────────────────────────────────────────────
 
 fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usize>) {
+    let (r, g, b) = app.config.theme_color;
+    let theme = Color::Rgb(r, g, b);
     let chunks = Layout::default()
         .constraints([Constraint::Min(0), Constraint::Length(3)])
         .split(area);
@@ -518,12 +626,12 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
             };
 
             let marker = match i {
-                2 | 4 | 5 | 6 => " [Enter: toggle]",
+                2 | 4 | 5 | 7 | 8 => " [Enter: toggle]",
                 _ => " [Enter: edit]",
             };
 
             ListItem::new(Line::from(vec![
-                Span::styled(format!("  {}: ", label), Style::default().fg(Color::Cyan).bold()),
+                Span::styled(format!("  {}: ", label), Style::default().fg(theme).bold()),
                 Span::styled(display_val.to_string(), style),
                 Span::styled(marker, Style::default().fg(Color::DarkGray)),
             ]))
@@ -531,11 +639,12 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().title(" Settings ").borders(Borders::ALL))
+        .block(Block::default().title(" ⚙  Settings ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(30, 30, 30))
-                .add_modifier(Modifier::BOLD),
+                .bg(theme)
+                .fg(Color::Black)
+                .bold(),
         );
     f.render_stateful_widget(list, chunks[0], &mut app.set_state);
 
