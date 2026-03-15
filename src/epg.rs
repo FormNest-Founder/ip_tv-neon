@@ -1,3 +1,5 @@
+// ─── Imports ─────────────────────────────────────────────────────────────────
+
 use crate::consts::*;
 use crate::models::{AppData, CacheContainer, Channel, Config, EpgProgram, RadioStation};
 use crate::utils::{main_log, normalize, parse_xml_time};
@@ -13,10 +15,14 @@ use std::io::{BufRead, BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+// ─── M3U Regex Patterns ─────────────────────────────────────────────────────
+
 static RE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-id="([^"]+)""#).unwrap());
 static RE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-name="([^"]+)""#).unwrap());
 static RE_GROUP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"group-title="([^"]+)""#).unwrap());
 static RE_REC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-rec="(\d+)""#).unwrap());
+
+// ─── Data Update (Radio + M3U + EPG) ─────────────────────────────────────────
 
 pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()> {
     main_log("Starting update_data...");
@@ -224,6 +230,8 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
     Ok(())
 }
 
+// ─── Cache Persistence ───────────────────────────────────────────────────────
+
 pub fn save_data(data: AppData) -> Result<()> {
     let path = get_data_bin_path();
     fs::create_dir_all(get_cache_dir())?;
@@ -234,6 +242,8 @@ pub fn save_data(data: AppData) -> Result<()> {
     fs::rename(tmp, path)?;
     Ok(())
 }
+
+// ─── Radio Now Playing ───────────────────────────────────────────────────────
 
 pub async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String> {
     let mut map = HashMap::new();
@@ -254,6 +264,8 @@ pub async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String
     map
 }
 
+// ─── EPG Lookup Helpers ──────────────────────────────────────────────────────
+
 pub fn find_epg_id(ch: &Channel, data: &AppData) -> Option<String> {
     if let Some(id) = &ch.tvg_id { if data.epg.contains_key(id) { return Some(id.clone()); } }
     data.name_to_id.get(&ch.norm_name).cloned()
@@ -263,6 +275,8 @@ pub fn get_current_epg(ch: &Channel, data: &AppData, now: i64) -> Option<EpgProg
     let id = find_epg_id(ch, data)?;
     data.epg.get(&id)?.iter().find(|p| now >= p.start && now < p.stop).cloned()
 }
+
+// ─── Local Playlist Scanner ──────────────────────────────────────────────────
 
 pub fn scan_local_playlists() -> Vec<PathBuf> {
     let mut res = Vec::new();

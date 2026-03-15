@@ -1,8 +1,12 @@
+// ─── Imports ─────────────────────────────────────────────────────────────────
+
 use crate::app::App;
 use crate::epg::get_current_epg;
 use crate::models::{Channel, Screen, SETTINGS_COUNT, SETTINGS_LABELS};
 use chrono::Utc;
 use ratatui::{prelude::*, widgets::*};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel]) -> &'a str {
     channels
@@ -11,6 +15,8 @@ pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel]) -> &'a str {
         .map(|ch| ch.name.as_str())
         .unwrap_or(url)
 }
+
+// ─── Main Render Dispatch ────────────────────────────────────────────────────
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -36,6 +42,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         return;
     }
 
+    // ── Screen Dispatch ───────────────────────────────────────────────────
     match &app.screen {
         Screen::Updating => {
             let text = "\n\n  UPDATING DATA...\n  PLEASE WAIT...";
@@ -328,6 +335,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 }
 
+// ─── Detail Screen ───────────────────────────────────────────────────────────
+
 fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let ch_idx = match app.detail_channel {
         Some(i) => i,
@@ -477,6 +486,8 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+// ─── Time Formatting ─────────────────────────────────────────────────────────
+
 fn format_time(ts: i64) -> String {
     use chrono::{Local, TimeZone};
     Local
@@ -485,6 +496,8 @@ fn format_time(ts: i64) -> String {
         .map(|dt| dt.format("%H:%M").to_string())
         .unwrap_or_default()
 }
+
+// ─── Settings Screen ─────────────────────────────────────────────────────────
 
 fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usize>) {
     let chunks = Layout::default()
@@ -542,6 +555,8 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
         chunks[1],
     );
 }
+
+// ─── AI Chat Screen ──────────────────────────────────────────────────────────
 
 fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
     let focus_border = |focused: bool| -> Style {

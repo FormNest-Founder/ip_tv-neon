@@ -1,7 +1,11 @@
+// ─── Imports ─────────────────────────────────────────────────────────────────
+
 use crate::epg::{find_epg_id, get_current_epg};
 use crate::models::{AppData, Channel, EpgProgram};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+
+// ─── Data Types ──────────────────────────────────────────────────────────────
 
 /// Result of AI-powered EPG search
 #[derive(Clone, Debug)]
@@ -26,6 +30,8 @@ pub struct AiChatResponse {
     pub text: String,
     pub keywords: Option<Vec<String>>,
 }
+
+// ─── API Types ───────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct ApiMessage {
@@ -56,6 +62,8 @@ struct ApiResponse {
     choices: Vec<ApiChoice>,
 }
 
+// ─── System Prompt ───────────────────────────────────────────────────────────
+
 const SYSTEM_PROMPT: &str = "\
 Ты — NEON AI, персональный ТВ-ассистент и эксперт по кино/сериалам.
 
@@ -78,6 +86,8 @@ const SYSTEM_PROMPT: &str = "\
 5. Если пользователь просто общается (не ищет контент) — НЕ добавляй KEYWORDS.
 6. Учитывай HISTORY для персональных рекомендаций.
 7. NOW_PLAYING — справка о текущем эфире. Используй для ответов 'что сейчас идёт'.";
+
+// ─── Context Builder ─────────────────────────────────────────────────────────
 
 /// Build context string with current EPG + viewing history
 pub fn build_context(data: &AppData, config_history: &[String], channels: &[Channel]) -> String {
@@ -116,6 +126,8 @@ pub fn build_context(data: &AppData, config_history: &[String], channels: &[Chan
 
     ctx
 }
+
+// ─── AI Chat ─────────────────────────────────────────────────────────────────
 
 /// Full chat with DeepSeek — returns response text + optional search keywords
 pub async fn ai_chat(
@@ -212,6 +224,8 @@ pub async fn ai_chat(
     }
 }
 
+// ─── Keywords Extraction ─────────────────────────────────────────────────────
+
 /// Extract "KEYWORDS: ..." line from response, return (clean_text, Option<keywords>)
 fn extract_keywords(text: &str) -> (String, Option<Vec<String>>) {
     let mut lines: Vec<&str> = Vec::new();
@@ -249,6 +263,8 @@ const STOP_WORDS: &[&str] = &[
     "movie", "film", "show", "series", "best", "new", "episode", "channel",
     "watch", "online", "top", "rating", "про", "the", "and",
 ];
+
+// ─── EPG Search ──────────────────────────────────────────────────────────────
 
 /// Search EPG across all channels using keywords
 pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearchResult> {
@@ -318,17 +334,22 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
         }
     }
 
+    // Dedup first: sort by dedup key, remove duplicates, then sort by display order
+    results.sort_by(|a, b| {
+        a.channel_idx.cmp(&b.channel_idx)
+            .then(a.program.title.cmp(&b.program.title))
+            .then(a.program.start.cmp(&b.program.start))
+    });
+    results.dedup_by(|a, b| {
+        a.channel_idx == b.channel_idx
+            && a.program.title == b.program.title
+            && a.program.start == b.program.start
+    });
     results.sort_by(|a, b| {
         b.is_live
             .cmp(&a.is_live)
             .then(b.score.cmp(&a.score))
             .then(a.program.start.cmp(&b.program.start))
-    });
-
-    results.dedup_by(|a, b| {
-        a.channel_idx == b.channel_idx
-            && a.program.title == b.program.title
-            && a.program.start == b.program.start
     });
 
     results.truncate(100);

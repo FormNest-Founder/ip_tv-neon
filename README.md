@@ -1,340 +1,171 @@
-# NEON IPTV — Terminal IPTV & Radio Player
+# NEON IPTV — The Only Terminal IPTV Player with a Built-in AI Brain
 
-Not another media player with a bloated UI. NEON IPTV is a **2400-line Rust application** that does one thing well: lets you browse, search, and watch IPTV/Radio from the terminal — instantly.
+**Ask your TV "what comedies are on tonight?" and get results you can play with one keypress.**
 
-## Why This Exists
+NEON IPTV is a 2400-line Rust TUI that combines an IPTV/Radio player with a live LLM assistant. The AI sees your full EPG (thousands of programs across hundreds of channels), understands your viewing history, and finds exactly what you want — in natural language, in under 2 seconds.
 
-Most IPTV apps are Electron wrappers or Android ports that eat 500MB of RAM to show a channel list. NEON IPTV takes a different approach:
+No Electron. No browser. No 500MB RAM for a channel list. Just a 4.3MB static binary, 15MB RSS, and mpv doing what mpv does best.
 
-- **Pure Rust + async tokio** — cold start under 100ms, ~15MB RSS. Binary cache (bincode) means no re-parsing playlists on every launch.
-- **mpv as the player** — not a built-in half-baked video widget. Your system mpv with your configs, your shaders, your hardware acceleration. The app manages mpv as an async child process and gets out of the way.
-- **LLM-powered EPG search** — ask "what comedies are on tonight?" in natural language. The AI sees the live EPG across all your channels, understands context from your viewing history, and finds matching programs you can play with one keypress. Not a gimmick — it solves the real problem of scrolling through 500+ channels.
-- **Terminal-native** — runs over SSH, in tmux, on a headless server driving a TV. No X11/Wayland required for the UI (only mpv needs a display for video output).
+![Main Menu](screenshots/main.png)
+
+## What the AI Actually Does
+
+This isn't a chatbot bolted onto a player. The LLM is wired into the EPG search engine:
+
+1. **You ask** — "horror movies tonight", "что идёт на спортивных каналах", "podborka multfilmov"
+2. **AI analyzes** — sees live EPG across all channels + your viewing history, generates targeted search keywords
+3. **Search engine fires** — TF-IDF scoring across every program title and description, live results ranked first
+4. **You play** — select any result, hit Enter. Live stream, archive, or timeshift — one keypress
+
+![AI Chat — natural language search across all channels](screenshots/ai_chat.png)
+
+The AI costs ~$0.001 per query (DeepSeek V3). Without an API key, everything else works normally.
+
+## Why Rust + mpv
+
+- **4.3MB binary, 15MB RSS** — cold start under 100ms. Binary cache (bincode) means zero re-parsing on launch
+- **mpv as the player** — not a built-in video widget. Your system mpv with your configs, your shaders (`CAS`, `FSR`), your `vaapi`/`vulkan` hwdec. The app manages mpv as an async child process and gets out of the way
+- **Fully async** — tokio runtime: HTTP fetches, mpv lifecycle, radio track info, AI chat — nothing blocks the UI
+- **Terminal-native** — runs over SSH, in tmux, on a headless server driving a TV
+
+## Screenshots
+
+### Channel Browser — live EPG with progress bars
+![Channels](screenshots/channels.png)
+
+### Detail Screen — full schedule with archive playback
+![Detail](screenshots/detail.png)
+
+### Radio — 100+ stations with live track info
+![Radio](screenshots/radio.png)
 
 ## Features
 
 ### IPTV
-- **Channel browser** — categories with channel counts, real-time search
-- **EPG integration** — current program with live progress bar (gradient green → yellow → red)
-- **TimeShift / Archive** — playback past programs via catchup URLs (`tvg-rec` days auto-detection)
-- **Channel markers** — `★` favorites, `⏪` archive-capable channels
-- **Detail screen** — full EPG schedule with times, descriptions, current program highlight
+- Category browser with channel counts, real-time search filter
+- Live EPG progress bars (gradient green → yellow → red)
+- TimeShift / Archive — play past programs via catchup URLs (`tvg-rec` auto-detection)
+- Channel markers: `★` favorites, `⏪` archive-capable
+- Detail screen: full EPG schedule, program descriptions, one-key playback
 
 ### Radio
-- **Radio Record** stations with genre categories
-- **Now Playing** — async track info fetch (artist — song), non-blocking
+- Radio Record stations with genre categories
+- Async now-playing track info (artist — song), non-blocking
 - Background playback — TUI stays interactive while radio plays
 
-### AI Chat (optional)
-- Smart TV assistant powered by DeepSeek API (or any OpenAI-compatible endpoint)
-- **Context-aware**: feeds current EPG across channels + your viewing history to the LLM
-- Auto-extracts keywords from AI response and searches EPG in real-time
-- Split-screen UI: search results (top) + chat (bottom)
-- Cost: ~$0.001 per query (DeepSeek V3 pricing)
+### AI Assistant
+- DeepSeek V3 (or any OpenAI-compatible API)
+- Context-aware: live EPG + viewing history fed to LLM on every query
+- Auto keyword extraction → real-time EPG search
+- Split-screen: results (top) + chat (bottom), Tab to switch focus
 
-### Video Playback
-- **mpv** as an external player — your config, your shaders, your hwdec
-- Async process management via `tokio::process` with 12h timeout
-- Fullscreen or windowed mode (configurable geometry)
-- Suspended mode: TUI hides during video, auto-restores after mpv exits
-- Radio: mpv runs in background (`--no-video`), TUI stays interactive
+### Video
+- mpv as external player — your config, your shaders, your hwdec
+- Async process management via `tokio::process` (12h timeout)
+- Fullscreen or windowed (configurable geometry)
+- Suspended mode: TUI hides during video, auto-restores on exit
 
 ### Performance
-- **~15MB RSS** — no Electron, no WebView, no garbage collector
-- **Instant startup** — versioned binary cache (bincode), no re-parsing on launch
-- **Non-blocking I/O** — async everything: HTTP fetches, mpv management, track info, AI chat
-- **Zero-copy XML parsing** — EPG parsed with `quick-xml` enum-based state machine, no String allocations in hot path
-
-### Other
-- **Favorites** — persistent set, toggle with `f`
-- **History** — last 200 watched streams (deduplicated)
-- **Local playlists** — scans `~/`, `~/Downloads/`, `~/Videos/` for `.m3u`/`.m3u8` files
-- **7 color themes** — Cyan, Magenta, Neon Green, Orange, Purple, Yellow, Red
-- **Panic hook** — terminal is always restored on crash
-- **Diagnostics** — `ip_tv diag` shows all paths, URLs, cache state
-
-## Screenshots
-
-*Coming soon*
+- **4.3MB** fat LTO binary (Clang + LLD, target-cpu optimized)
+- **~15MB RSS** — no Electron, no GC
+- **Instant startup** — versioned bincode cache
+- **Zero-copy XML** — EPG parsed with `quick-xml` SAX state machine
 
 ## Requirements
 
 - **Linux** (tested on Arch/CachyOS)
-- **mpv** — media player (`pacman -S mpv` / `apt install mpv`)
+- **mpv** — `pacman -S mpv` / `apt install mpv`
 - **Rust toolchain** — for building from source
-- **niri** (optional) — Wayland compositor for suspended video mode. Without niri, video plays without TUI hiding
-- **DeepSeek API key** (optional) — for AI Chat feature
+- **niri** (optional) — Wayland compositor for suspended video mode
+- **DeepSeek API key** (optional) — for AI assistant
 
-## Installation
-
-### Build from source
+## Quick Start
 
 ```bash
-git clone https://github.com/user/ip_tv-neon.git
+git clone https://github.com/nicorp/ip_tv-neon.git
 cd ip_tv-neon
 cargo build --release
+cp target/release/ip_tv-neon ~/.local/bin/ip_tv
 ```
-
-### Install binary
-
-```bash
-# Copy to a directory in your $PATH
-cp target/release/ip_tv ~/.local/bin/
-
-# Or install via cargo
-cargo install --path .
-```
-
-### Verify
-
-```bash
-ip_tv diag
-```
-
-## Usage
 
 ```bash
 ip_tv              # Launch TUI
-ip_tv update        # Update data (playlist + EPG + radio) without TUI
-ip_tv diag          # Show diagnostics (paths, URLs, cache info)
-ip_tv --debug       # Launch with debug logging to /tmp/neon_iptv.log
+ip_tv update        # Update playlist + EPG + radio
+ip_tv diag          # Show diagnostics
+```
+
+1. Settings → Playlist URL → paste your M3U/M3U8
+2. Main Menu → Update
+3. IPTV → pick category → pick channel → Enter
+
+### AI Setup (optional)
+
+```bash
+export DEEPSEEK_API_KEY="sk-your-key-here"  # add to shell profile
 ```
 
 ## Configuration
 
-### File Locations
-
 | Path | Description |
 |------|-------------|
-| `~/.config/neon-iptv/config.json` | Main config (URLs, theme, favorites, history) |
-| `~/.cache/neon-iptv/data.bin` | Binary data cache (channels, EPG, radio) |
-| `/tmp/neon_iptv.log` | Debug log (only with `--debug`) |
-| `/tmp/neon_mpv.log` | MPV log (only with `--debug`) |
-
-Config and cache directories follow the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/). On most Linux systems:
-- Config: `~/.config/neon-iptv/`
-- Cache: `~/.cache/neon-iptv/`
-
-### config.json
-
-Created automatically on first run. You can edit it manually or via the in-app Settings screen.
+| `~/.config/neon-iptv/config.json` | URLs, theme, favorites, history |
+| `~/.cache/neon-iptv/data.bin` | Binary cache (channels, EPG, radio) |
 
 ```json
 {
   "playlist_url": "https://example.com/playlist.m3u",
   "epg_url": "http://epg.one/epg.xml.gz",
   "theme_color": [0, 255, 255],
-  "favorites": [],
-  "history": [],
   "video_fullscreen": true,
   "video_geometry": "1280x720"
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `playlist_url` | string | URL to M3U/M3U8 playlist, or local file path |
-| `epg_url` | string | URL to XMLTV EPG (supports `.xml.gz` gzip). Default: `http://epg.one/epg.xml.gz` |
-| `theme_color` | [R, G, B] | UI accent color. See theme presets below |
-| `favorites` | string[] | Stream URLs marked as favorites |
-| `history` | string[] | Last 200 watched stream URLs (auto-managed) |
-| `video_fullscreen` | bool | Launch mpv in fullscreen mode |
-| `video_geometry` | string | Window size when fullscreen is off (e.g. `"1920x1080"`) |
-
-### Theme Presets
-
-| Name | RGB |
-|------|-----|
-| Cyan | `[0, 255, 255]` |
-| Magenta | `[255, 0, 255]` |
-| Neon Green | `[0, 255, 128]` |
-| Orange | `[255, 128, 0]` |
-| Purple | `[128, 0, 255]` |
-| Yellow | `[255, 255, 0]` |
-| Red | `[255, 0, 0]` |
-
-### AI Chat Setup (optional)
-
-The AI Chat feature uses [DeepSeek API](https://platform.deepseek.com/) (`deepseek-chat` model).
-
-1. Get an API key at https://platform.deepseek.com/
-2. Set the environment variable:
-
-```bash
-# Add to your shell profile (~/.bashrc, ~/.config/fish/config.fish, etc.)
-export DEEPSEEK_API_KEY="sk-your-key-here"
-```
-
-Without the key, all other features work normally — AI Chat will show an error message when accessed.
-
-## First Run
-
-1. **Launch:** `ip_tv`
-2. **Set playlist:** Settings → Playlist URL → paste your M3U/M3U8 URL (or local path)
-3. **Set EPG:** Settings → EPG URL → paste your EPG source (default is pre-filled: `epg.one`)
-4. **Update data:** Main Menu → Update — downloads playlist, EPG, and radio stations
-5. **Watch:** Navigate to IPTV → pick a category → pick a channel → Enter
-
-## Playlist Format
-
-Standard M3U/M3U8 with extended attributes:
-
-```m3u
-#EXTM3U
-#EXTINF:-1 tvg-id="channel.id" tvg-name="Channel Name" group-title="Category" tvg-rec="7",Channel Name
-http://stream.example.com/live/stream.m3u8
-
-#EXTGRP:Another Category
-#EXTINF:-1,Simple Channel
-http://another.stream/live
-```
-
-| Attribute | Description |
-|-----------|-------------|
-| `tvg-id` | EPG channel ID (for matching EPG data) |
-| `tvg-name` | Display name override |
-| `group-title` | Category name |
-| `tvg-rec` | Archive days available (enables TimeShift) |
-
-Playlists can be loaded from:
-- **HTTP/HTTPS URL** — set in config or Settings
-- **Local file** — set path in Playlist URL, or use the Local Playlists screen (scans `~/`, `~/Downloads/`, `~/Videos/`)
-
-## EPG Format
-
-Standard [XMLTV](http://wiki.xmltv.org/index.php/XMLTVFormat) format, optionally gzip-compressed (`.xml.gz`):
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<tv>
-  <channel id="channel.id">
-    <display-name>Channel Name</display-name>
-  </channel>
-  <programme start="20260314120000 +0300" stop="20260314130000 +0300" channel="channel.id">
-    <title>Program Title</title>
-    <desc>Program description</desc>
-  </programme>
-</tv>
-```
-
-EPG channels are matched to playlist channels by `tvg-id` first, then by normalized channel name.
+7 built-in themes: Cyan, Magenta, Neon Green, Orange, Purple, Yellow, Red.
 
 ## Keyboard Controls
 
-### Global
-
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Navigate lists |
+| `↑` / `↓` | Navigate |
 | `Enter` | Select / Play |
-| `Esc` | Go back / Stop playback |
+| `Esc` | Back / Stop |
 | `Ctrl+C` | Quit |
-
-### Channel List
-
-| Key | Action |
-|-----|--------|
 | `f` | Toggle favorite |
-| `d` | Open channel detail (EPG schedule) |
-| Type letters | Real-time search filter |
-| `Backspace` | Clear search character |
-
-### Detail Screen (EPG)
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Play selected program (live or archive) |
-| `l` | Play live stream |
-| `Esc` | Back to channel list |
-
-### AI Chat
-
-| Key | Action |
-|-----|--------|
-| `Tab` | Toggle focus between results and chat input |
-| Type letters | Chat input |
-| `Enter` | Send message / Play selected result |
-| `d` | Open channel detail for selected result |
-
-### Settings
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Edit setting / Toggle / Execute action |
-| Type | Edit value |
-| `Enter` | Save edited value |
-| `Esc` | Cancel edit |
+| `d` | Channel detail (EPG) |
+| `l` | Play live (in Detail) |
+| `Tab` | Switch focus (AI Chat) |
+| Type | Search filter / Chat input |
 
 ## Architecture
 
 ```
 src/
-├── main.rs     505 lines  Event loop, async tasks, key handling, suspended mode
-├── ui.rs       702 lines  Screen rendering (ratatui widgets, themes, layout)
-├── app.rs      370 lines  App state, mpv launch, filters, navigation
-├── ai.rs       336 lines  DeepSeek chat, EPG context, keyword extraction
-├── epg.rs      282 lines  M3U/EPG/radio parsing, XML parser, cache
-├── models.rs   151 lines  Data structures (Config, Channel, Screen, AppData)
-├── utils.rs     28 lines  Normalize, XML time parser, logging
-└── consts.rs    27 lines  Constants, XDG paths, API endpoints
-                ──────
-                2401 lines total
+├── main.rs     Entry point, async event loop, key dispatch
+├── ui.rs       TUI rendering (ratatui)
+├── app.rs      State, mpv control, filters
+├── ai.rs       LLM chat, keyword extraction, EPG search engine
+├── epg.rs      M3U/XMLTV/radio parsing, binary cache
+├── models.rs   Data structures, config
+├── utils.rs    Helpers
+└── consts.rs   Constants, XDG paths
+    ─────
+    ~2500 lines
 ```
 
-### Data Flow
+## Built With
 
-```
-Playlist URL (M3U)  ──→  epg.rs (parse)  ──→  AppData.channels
-EPG URL (XMLTV)     ──→  epg.rs (parse)  ──→  AppData.epg
-Radio API           ──→  epg.rs (fetch)  ──→  AppData.radio
-                                              ↓
-                                         data.bin (bincode cache)
-                                              ↓
-                                         app.rs (App state)
-                                              ↓
-                                         ui.rs (render) ──→ Terminal
-                                              ↓
-                                         mpv (external player)
-```
+| Component | Stack |
+|-----------|-------|
+| Language | Rust (async, tokio) |
+| TUI | ratatui + crossterm |
+| Player | mpv (external process) |
+| AI | DeepSeek V3 API |
+| Build | Clang + LLD, fat LTO, target-cpu optimized |
 
-## Tech Stack
+## About
 
-| Component | Crate/Tool | Purpose |
-|-----------|------------|---------|
-| Async runtime | `tokio` | Non-blocking I/O, process management |
-| TUI framework | `ratatui` + `crossterm` | Terminal UI rendering |
-| HTTP client | `reqwest` | Playlist/EPG/API fetching |
-| XML parser | `quick-xml` | EPG XMLTV parsing |
-| Compression | `flate2` | Gzip EPG decompression |
-| Serialization | `bincode` + `serde` | Binary cache, JSON config |
-| Regex | `regex` | M3U attribute parsing |
-| Media player | `mpv` (external) | Stream playback |
-| AI | DeepSeek API | TV assistant (optional) |
-
-## Troubleshooting
-
-### No channels after update
-- Check your playlist URL in Settings — it must be a valid M3U/M3U8
-- Run `ip_tv diag` to verify paths and URLs
-- Check if the URL is accessible: `curl -I "your-playlist-url"`
-
-### No EPG data
-- Verify EPG URL in Settings
-- EPG matching uses `tvg-id` from playlist — ensure your playlist has `tvg-id` attributes
-- Run update again — EPG download can be slow for large files
-
-### mpv doesn't start
-- Ensure mpv is installed: `mpv --version`
-- Check stream URL manually: `mpv "stream-url"`
-- Use `--debug` flag and check `/tmp/neon_mpv.log`
-
-### Cache issues
-- Delete cache to force full reload: `rm ~/.cache/neon-iptv/data.bin`
-- Cache auto-resets when the app version changes
-
-### AI Chat shows error
-- Set `DEEPSEEK_API_KEY` environment variable
-- Verify key works: `curl -H "Authorization: Bearer $DEEPSEEK_API_KEY" https://api.deepseek.com/v1/models`
+Written by [Claude](https://claude.ai) (Anthropic) under the architectural direction of a human SRE. Every design decision, feature scope, and code review — human. Every line of code — AI. This is what human-AI collaboration looks like when the human knows what they want and the AI knows how to build it.
 
 ## License
 

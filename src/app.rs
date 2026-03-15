@@ -1,3 +1,5 @@
+// ─── Imports ─────────────────────────────────────────────────────────────────
+
 use crate::ai::{AiSearchResult, ChatMsg};
 use crate::consts::*;
 use crate::epg::find_epg_id;
@@ -8,6 +10,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
+
+// ─── App State ───────────────────────────────────────────────────────────────
 
 pub struct App {
     pub config: Config,
@@ -49,6 +53,8 @@ pub struct App {
     pub ai_focus_results: bool,
     pub ai_chat_scroll: u16,
 }
+
+// ─── Constructor & Data Loading ──────────────────────────────────────────────
 
 impl App {
     pub fn new(config: Config) -> Self {
@@ -129,7 +135,10 @@ impl App {
         self.suspended = false;
     }
 
+    // ─── Detail / EPG Playback ────────────────────────────────────────────
+
     pub fn open_detail(&mut self, channel_idx: usize) {
+        if channel_idx >= self.data.channels.len() { return; }
         self.detail_return_screen = Some(self.screen);
         let ch = &self.data.channels[channel_idx];
         self.detail_channel = Some(channel_idx);
@@ -162,8 +171,8 @@ impl App {
 
     pub fn detail_play_selected(&mut self) {
         let ch_idx = match self.detail_channel {
-            Some(i) => i,
-            None => return,
+            Some(i) if i < self.data.channels.len() => i,
+            _ => return,
         };
         let ch = &self.data.channels[ch_idx];
         let url = ch.url.clone();
@@ -199,8 +208,8 @@ impl App {
 
     pub fn detail_play_live(&mut self) {
         let ch_idx = match self.detail_channel {
-            Some(i) => i,
-            None => return,
+            Some(i) if i < self.data.channels.len() => i,
+            _ => return,
         };
         let ch = &self.data.channels[ch_idx];
         let url = ch.url.clone();
@@ -208,6 +217,8 @@ impl App {
         self.run_mpv(&url, &name, "", false);
         self.config.history_push(&url);
     }
+
+    // ─── MPV Player ──────────────────────────────────────────────────────
 
     pub fn run_mpv(&mut self, url: &str, title: &str, sub_title: &str, radio: bool) {
         self.stop_all();
@@ -235,7 +246,7 @@ impl App {
             c.arg(url);
             c.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
             #[cfg(unix)]
-            unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
+            unsafe { c.pre_exec(|| { if libc::setsid() == -1 { return Err(std::io::Error::last_os_error()); } Ok(()) }); }
             match c.spawn() {
                 Ok(child) => { self.mpv_handle = Some(child); }
                 Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
@@ -249,7 +260,7 @@ impl App {
             c.arg(url);
             c.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
             #[cfg(unix)]
-            unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
+            unsafe { c.pre_exec(|| { if libc::setsid() == -1 { return Err(std::io::Error::last_os_error()); } Ok(()) }); }
             match c.spawn() {
                 Ok(child) => {
                     self.mpv_handle = Some(child);
@@ -262,12 +273,15 @@ impl App {
         }
     }
 
+    // ─── AI Playback ────────────────────────────────────────────────────
+
     pub fn ai_play_selected(&mut self) {
         let idx = match self.ai_state.selected() {
             Some(i) if i < self.ai_results.len() => i,
             _ => return,
         };
         let result = self.ai_results[idx].clone();
+        if result.channel_idx >= self.data.channels.len() { return; }
         let ch = &self.data.channels[result.channel_idx];
         let url = ch.url.clone();
         let name = ch.name.clone();
@@ -289,6 +303,8 @@ impl App {
         }
         self.config.history_push(&url);
     }
+
+    // ─── Favorites & Filtering ────────────────────────────────────────────
 
     pub fn sorted_favorites(&self) -> Vec<&String> {
         let mut favs: Vec<_> = self.config.favorites.iter().collect();
@@ -320,6 +336,8 @@ impl App {
         self.r_state.select(if self.filtered_radio.is_empty() { None } else { Some(0) });
         self.needs_redraw = true;
     }
+
+    // ─── Settings ────────────────────────────────────────────────────────
 
     pub fn settings_value(&self, idx: usize) -> String {
         use crate::models::THEME_PRESETS;

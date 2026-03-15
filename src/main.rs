@@ -1,3 +1,5 @@
+// ─── Imports ─────────────────────────────────────────────────────────────────
+
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -7,6 +9,8 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+// ─── Modules ─────────────────────────────────────────────────────────────────
 
 mod ai;
 mod app;
@@ -20,7 +24,11 @@ use app::App;
 use epg::{fetch_radio_now, scan_local_playlists, update_data};
 use models::{Config, Screen, SETTINGS_COUNT};
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+
 const MENU_ITEMS: usize = 10;
+
+// ─── Entry Point & Event Loop ────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -60,6 +68,7 @@ async fn main() -> Result<()> {
     let mut radio_tracks_dirty = true;
     let mut radio_task: Option<tokio::task::JoinHandle<HashMap<String, String>>> = None;
     let mut ai_task: Option<tokio::task::JoinHandle<ai::AiChatResponse>> = None;
+    let mut update_task: Option<tokio::task::JoinHandle<Result<()>>> = None;
     let tick_rate = Duration::from_millis(1000);
 
     loop {
@@ -145,23 +154,35 @@ async fn main() -> Result<()> {
             }
         }
 
-        if matches!(app.screen, Screen::Updating) {
-            terminal.draw(|f| ui::ui(f, &mut app))?;
-            match update_data(&app.config, &http_client).await {
-                Ok(()) => {
-                    app.reload_data();
-                    let ch = app.data.channels.len();
-                    let rd = app.data.radio.len();
-                    let epg = app.data.epg.len();
-                    app.status_msg = Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
+        // Launch data update as background task (non-blocking)
+        if matches!(app.screen, Screen::Updating) && update_task.is_none() {
+            let config = app.config.clone();
+            let client = http_client.clone();
+            update_task = Some(tokio::spawn(async move {
+                update_data(&config, &client).await
+            }));
+        }
+        // Check if update task finished
+        if update_task.as_ref().is_some_and(|t| t.is_finished()) {
+            if let Some(task) = update_task.take() {
+                match task.await {
+                    Ok(Ok(())) => {
+                        app.reload_data();
+                        let ch = app.data.channels.len();
+                        let rd = app.data.radio.len();
+                        let epg = app.data.epg.len();
+                        app.status_msg = Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
+                    }
+                    Ok(Err(e)) => {
+                        app.status_msg = Some(format!("Update failed: {}", e));
+                    }
+                    Err(e) => {
+                        app.status_msg = Some(format!("Update task panic: {}", e));
+                    }
                 }
-                Err(e) => {
-                    app.status_msg = Some(format!("Update failed: {}", e));
-                }
+                app.screen = Screen::MainMenu;
+                app.needs_redraw = true;
             }
-            app.screen = Screen::MainMenu;
-            app.needs_redraw = true;
-            continue;
         }
 
         if app.needs_redraw || last_tick.elapsed() >= tick_rate {
@@ -249,6 +270,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+// ─── Navigation Helpers ──────────────────────────────────────────────────────
+
 fn nav_up(state: &mut ListState, len: usize) {
     if len == 0 { return; }
     let i = state.selected().unwrap_or(0);
@@ -260,6 +283,8 @@ fn nav_down(state: &mut ListState, len: usize) {
     let i = state.selected().unwrap_or(0);
     state.select(Some(if i >= len - 1 { 0 } else { i + 1 }));
 }
+
+// ─── Key Handlers ────────────────────────────────────────────────────────────
 
 async fn handle_key(app: &mut App, key: event::KeyEvent) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -468,7 +493,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Enter => app.detail_play_selected(),
             KeyCode::Char('l') => app.detail_play_live(),
             KeyCode::Char('f') => {
-                if let Some(ch_idx) = app.detail_channel {
+                if let Some(ch_idx) = app.detail_channel.filter(|&i| i < app.data.channels.len()) {
                     let url = app.data.channels[ch_idx].url.clone();
                     if app.config.favorites.contains(&url) { app.config.favorites.remove(&url); }
                     else { app.config.favorites.insert(url); }
@@ -488,6 +513,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         }
     }
 }
+
+// ─── Diagnostics ─────────────────────────────────────────────────────────────
 
 fn diag() -> Result<()> {
     println!("NEON IPTV Diagnostics");
