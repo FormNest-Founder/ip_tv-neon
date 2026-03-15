@@ -99,7 +99,7 @@ Supports two LLM providers — **DeepSeek V3** (~$0.001/query) and **Google Gemi
 ### Build from source
 
 ```bash
-git clone https://github.com/nicorp/ip_tv-neon.git
+git clone https://github.com/FormNest-Founder/ip_tv-neon.git
 cd ip_tv-neon
 cargo build --release
 ```
