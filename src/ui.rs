@@ -511,8 +511,6 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
                     "▶ "
                 } else if is_past && ch.catchup_days > 0 {
                     "⏪"
-                } else if is_past {
-                    "  "
                 } else {
                     "  "
                 };
@@ -542,7 +540,7 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
             .collect();
 
         let title = if ch.catchup_days > 0 {
-            format!(" Programs (⏪ = archive) ")
+            " Programs (⏪ = archive) ".to_string()
         } else {
             " Programs ".to_string()
         };
@@ -780,7 +778,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
     let mut wrapped_total = 0usize;
     for line in &chat_lines {
         let chars: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-        wrapped_total += if inner_w > 0 && chars > inner_w { (chars + inner_w - 1) / inner_w } else { 1 };
+        wrapped_total += if inner_w > 0 && chars > inner_w { chars.div_ceil(inner_w) } else { 1 };
     }
     let scroll = if wrapped_total > visible_h {
         (wrapped_total - visible_h) as u16

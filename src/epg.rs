@@ -27,7 +27,7 @@ static RE_REC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-rec="(\d+)""
 pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()> {
     main_log("Starting update_data...");
 
-    let tracks_map = fetch_radio_now(&client).await;
+    let tracks_map = fetch_radio_now(client).await;
     let mut radio = Vec::new();
     let mut radio_genres = HashSet::new();
     radio_genres.insert("All".to_string());

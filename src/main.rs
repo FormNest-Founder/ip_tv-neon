@@ -95,12 +95,9 @@ async fn main() -> Result<()> {
 
         // Check if background MPV (radio) has exited
         if let Some(ref mut child) = app.mpv_handle {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    app.mpv_handle = None;
-                    app.needs_redraw = true;
-                }
-                _ => {}
+            if let Ok(Some(_)) = child.try_wait() {
+                app.mpv_handle = None;
+                app.needs_redraw = true;
             }
         }
 
@@ -112,7 +109,7 @@ async fn main() -> Result<()> {
                 fetch_radio_now(&client).await
             }));
         }
-        let radio_done = radio_task.as_ref().map_or(false, |t| t.is_finished());
+        let radio_done = radio_task.as_ref().is_some_and(|t| t.is_finished());
         if radio_done {
             if let Some(task) = radio_task.take() {
                 if let Ok(tracks) = task.await {
