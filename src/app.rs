@@ -114,6 +114,7 @@ impl App {
         app.cat_state.select(Some(0));
         app.r_cat_state.select(Some(0));
         app.set_state.select(Some(0));
+        app.backfill_channel_names();
         app
     }
 
@@ -123,8 +124,30 @@ impl App {
             if let Ok(c) = bincode::deserialize_from::<_, CacheContainer>(f) {
                 if c.version == APP_VERSION {
                     self.data = c.data;
+                    self.backfill_channel_names();
                 }
             }
+        }
+    }
+
+    /// Заполнить channel_names из загруженного плейлиста для favorites/history
+    fn backfill_channel_names(&mut self) {
+        let mut dirty = false;
+        let urls: Vec<String> = self.config.favorites.iter()
+            .chain(self.config.history.iter())
+            .cloned()
+            .collect();
+        for url in &urls {
+            if self.config.channel_names.contains_key(url) {
+                continue;
+            }
+            if let Some(ch) = self.data.channels.iter().find(|ch| ch.url == *url) {
+                self.config.channel_names.insert(url.clone(), ch.name.clone());
+                dirty = true;
+            }
+        }
+        if dirty {
+            let _ = self.config.save();
         }
     }
 
@@ -197,13 +220,13 @@ impl App {
                 } else {
                     self.run_mpv(&url, &name, &prog_title, false);
                 }
-                self.config.history_push(&url);
+                self.config.history_push(&url, &name);
                 return;
             }
         }
 
         self.run_mpv(&url, &name, "", false);
-        self.config.history_push(&url);
+        self.config.history_push(&url, &name);
     }
 
     pub fn detail_play_live(&mut self) {
@@ -215,7 +238,7 @@ impl App {
         let url = ch.url.clone();
         let name = ch.name.clone();
         self.run_mpv(&url, &name, "", false);
-        self.config.history_push(&url);
+        self.config.history_push(&url, &name);
     }
 
     // ─── MPV Player ──────────────────────────────────────────────────────
@@ -301,14 +324,18 @@ impl App {
         } else {
             self.run_mpv(&url, &name, "", false);
         }
-        self.config.history_push(&url);
+        self.config.history_push(&url, &name);
     }
 
     // ─── Favorites & Filtering ────────────────────────────────────────────
 
     pub fn sorted_favorites(&self) -> Vec<&String> {
         let mut favs: Vec<_> = self.config.favorites.iter().collect();
-        favs.sort();
+        favs.sort_by(|a, b| {
+            let name_a = self.config.channel_name(a);
+            let name_b = self.config.channel_name(b);
+            name_a.cmp(name_b)
+        });
         favs
     }
 

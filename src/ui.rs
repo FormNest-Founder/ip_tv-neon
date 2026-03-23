@@ -8,12 +8,13 @@ use ratatui::{prelude::*, widgets::*};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel]) -> &'a str {
-    channels
-        .iter()
-        .find(|ch| ch.url == url)
-        .map(|ch| ch.name.as_str())
-        .unwrap_or(url)
+pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel], config: &'a crate::models::Config) -> &'a str {
+    // 1. Из загруженного плейлиста
+    if let Some(ch) = channels.iter().find(|ch| ch.url == url) {
+        return ch.name.as_str();
+    }
+    // 2. Из кешированных имён в конфиге
+    config.channel_name(url)
 }
 
 // ─── Category Icons ─────────────────────────────────────────────────────────
@@ -356,7 +357,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let items: Vec<ListItem> = favs
                 .iter()
                 .map(|url| {
-                    let name = get_name_by_url(url, &app.data.channels);
+                    let name = get_name_by_url(url, &app.data.channels, &app.config);
                     ListItem::new(format!("  ⭐  {}", name))
                         .style(Style::default().fg(theme))
                 })
@@ -379,7 +380,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .iter()
                 .rev()
                 .map(|url| {
-                    let name = get_name_by_url(url, &app.data.channels);
+                    let name = get_name_by_url(url, &app.data.channels, &app.config);
                     ListItem::new(format!("  🕐  {}", name))
                         .style(Style::default().fg(theme))
                 })

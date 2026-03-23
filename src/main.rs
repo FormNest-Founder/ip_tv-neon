@@ -371,13 +371,14 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Char('f') => {
                 if let Some(idx) = app.ch_state.selected() {
                     if idx < app.filtered.len() {
-                        let url = app.data.channels[app.filtered[idx]].url.clone();
+                        let ch = &app.data.channels[app.filtered[idx]];
+                        let url = ch.url.clone();
+                        let name = ch.name.clone();
                         if app.config.favorites.contains(&url) {
-                            app.config.favorites.remove(&url);
+                            app.config.favorite_remove(&url);
                         } else {
-                            app.config.favorites.insert(url);
+                            app.config.favorite_add(&url, &name);
                         }
-                        let _ = app.config.save();
                     }
                 }
             }
@@ -429,7 +430,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     let favs = app.sorted_favorites();
                     if idx < favs.len() {
                         let url = favs[idx].clone();
-                        let name = ui::get_name_by_url(&url, &app.data.channels).to_string();
+                        let name = ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
                         app.run_mpv(&url, &name, "", false);
                     }
                 }
@@ -446,7 +447,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     let history: Vec<_> = app.config.history.iter().rev().collect();
                     if idx < history.len() {
                         let url = history[idx].clone();
-                        let name = ui::get_name_by_url(&url, &app.data.channels).to_string();
+                        let name = ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
                         app.run_mpv(&url, &name, "", false);
                     }
                 }
@@ -492,10 +493,14 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Char('l') => app.detail_play_live(),
             KeyCode::Char('f') => {
                 if let Some(ch_idx) = app.detail_channel.filter(|&i| i < app.data.channels.len()) {
-                    let url = app.data.channels[ch_idx].url.clone();
-                    if app.config.favorites.contains(&url) { app.config.favorites.remove(&url); }
-                    else { app.config.favorites.insert(url); }
-                    let _ = app.config.save();
+                    let ch = &app.data.channels[ch_idx];
+                    let url = ch.url.clone();
+                    let name = ch.name.clone();
+                    if app.config.favorites.contains(&url) {
+                        app.config.favorite_remove(&url);
+                    } else {
+                        app.config.favorite_add(&url, &name);
+                    }
                 }
             }
             KeyCode::Esc => {

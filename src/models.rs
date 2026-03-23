@@ -13,6 +13,9 @@ pub struct Config {
     pub favorites: HashSet<String>,
     #[serde(default)]
     pub history: Vec<String>,
+    /// URL → channel name cache (для отображения без загруженного плейлиста)
+    #[serde(default)]
+    pub channel_names: HashMap<String, String>,
     #[serde(default = "default_fullscreen")]
     pub video_fullscreen: bool,
     #[serde(default = "default_geometry")]
@@ -34,6 +37,7 @@ impl Default for Config {
             theme_color: (0, 255, 255),
             favorites: HashSet::new(),
             history: Vec::new(),
+            channel_names: HashMap::new(),
             video_fullscreen: true,
             video_geometry: "1280x720".into(),
             local_dir: String::new(),
@@ -57,13 +61,35 @@ impl Config {
         Ok(())
     }
 
-    pub fn history_push(&mut self, url: &str) {
+    pub fn history_push(&mut self, url: &str, name: &str) {
         self.history.retain(|u| u != url);
         self.history.push(url.to_string());
         if self.history.len() > 200 {
             self.history.drain(0..self.history.len() - 200);
         }
+        if !name.is_empty() {
+            self.channel_names.insert(url.to_string(), name.to_string());
+        }
         let _ = self.save();
+    }
+
+    pub fn favorite_add(&mut self, url: &str, name: &str) {
+        self.favorites.insert(url.to_string());
+        if !name.is_empty() {
+            self.channel_names.insert(url.to_string(), name.to_string());
+        }
+        let _ = self.save();
+    }
+
+    pub fn favorite_remove(&mut self, url: &str) {
+        self.favorites.remove(url);
+        // Не удаляем из channel_names — может пригодиться для истории
+        let _ = self.save();
+    }
+
+    /// Получить имя канала: сначала из кеша, потом fallback на URL
+    pub fn channel_name<'a>(&'a self, url: &'a str) -> &'a str {
+        self.channel_names.get(url).map(|s| s.as_str()).unwrap_or(url)
     }
 }
 
