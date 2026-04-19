@@ -287,9 +287,6 @@ impl App {
             match c.spawn() {
                 Ok(child) => {
                     self.mpv_handle = Some(child);
-                    self.suspended = true;
-                    // Hide TUI window via niri
-                    let _ = std::process::Command::new("niri").args(["msg", "action", "move-column-to-workspace", "--focus", "false", "4"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
                 }
                 Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
             }

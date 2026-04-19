@@ -72,26 +72,7 @@ async fn main() -> Result<()> {
     let tick_rate = Duration::from_millis(1000);
 
     loop {
-        // Video suspended: hide TUI, wait for mpv, restore TUI
-        if app.suspended {
-            if let Some(mut child) = app.mpv_handle.take() {
-                let wait_result = tokio::time::timeout(
-                    Duration::from_secs(43200), // 12 hours max
-                    child.wait()
-                ).await;
-                if wait_result.is_err() {
-                    let _ = child.start_kill();
-                }
-                app.suspended = false;
-                // Restore TUI window via niri
-                let _ = std::process::Command::new("niri")
-                    .args(["msg", "action", "move-column-to-workspace", "1"])
-                    .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
-                terminal.clear()?;
-                app.needs_redraw = true;
-                continue;
-            }
-        }
+        // (niri suspend/restore removed — TUI stays visible while mpv plays)
 
         // Check if background MPV (radio) has exited
         if let Some(ref mut child) = app.mpv_handle {
