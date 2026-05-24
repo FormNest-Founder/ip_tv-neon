@@ -11,6 +11,7 @@ use ratatui::{prelude::*, widgets::*};
 const NEON_CYAN: Color = Color::Rgb(0, 255, 229);
 const NEON_MAGENTA: Color = Color::Rgb(255, 0, 200);
 const NEON_YELLOW: Color = Color::Rgb(255, 220, 0);
+#[allow(dead_code)]
 const NEON_DIM: Color = Color::Rgb(40, 0, 60);
 
 // ─── Radio player height (compact, AIMP-style) ───────────────────────────────
@@ -869,12 +870,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
 
 /// Build the composite marquee text: "Station │ Artist │ Track"
 /// Skips empty segments and joins remaining ones with " │ ".
-fn build_marquee_text(
-    station: &str,
-    artist: &str,
-    track: &str,
-    media_title: &str,
-) -> String {
+fn build_marquee_text(station: &str, artist: &str, track: &str, media_title: &str) -> String {
     // If we have structured metadata — build rich format
     if !track.is_empty() {
         let mut parts: Vec<&str> = vec![station];
