@@ -4,11 +4,13 @@ use crate::ai::{AiSearchResult, ChatMsg};
 use crate::consts::*;
 use crate::epg::find_epg_id;
 use crate::models::{AppData, CacheContainer, Config, EpgProgram, Screen};
+use crate::mpv_ipc::{spawn_ipc_task, IpcHandle, RadioState, SharedRadioState};
 use crate::utils::main_log;
 use ratatui::widgets::ListState;
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::process::{Child, Command};
 
 // ─── App State ───────────────────────────────────────────────────────────────
@@ -37,6 +39,9 @@ pub struct App {
     pub suspended: bool,
     pub local_files: Vec<PathBuf>,
     pub mpv_handle: Option<Child>,
+    pub radio_ipc: Option<IpcHandle>,
+    pub radio_state: SharedRadioState,
+    pub radio_station_title: String,
     pub needs_redraw: bool,
     pub debug: bool,
     pub status_msg: Option<String>,
@@ -95,6 +100,9 @@ impl App {
             suspended: false,
             local_files: Vec::new(),
             mpv_handle: None,
+            radio_ipc: None,
+            radio_state: Arc::new(Mutex::new(RadioState::default())),
+            radio_station_title: String::new(),
             needs_redraw: true,
             debug: false,
             status_msg: None,
@@ -152,10 +160,18 @@ impl App {
     }
 
     pub fn stop_all(&mut self) {
+        // Stop via IPC if available (graceful), otherwise kill
+        if let Some(ref ipc) = self.radio_ipc {
+            ipc.quit();
+        }
+        self.radio_ipc = None;
+
         if let Some(mut child) = self.mpv_handle.take() {
             let _ = child.start_kill();
         }
         self.suspended = false;
+        *self.radio_state.lock().unwrap() = RadioState::default();
+        self.radio_station_title.clear();
     }
 
     // ─── Detail / EPG Playback ────────────────────────────────────────────
@@ -253,10 +269,8 @@ impl App {
         };
 
         let mut c = Command::new("mpv");
-        c.arg(format!("--title=NEON: {}", display_title))
-            .arg(format!("--force-media-title={}", display_title))
+        c.arg(format!("--force-media-title={}", display_title))
             .arg("--volume=20")
-            .arg("--ontop")
             .arg("--no-ytdl");
 
         if self.debug {
@@ -265,16 +279,36 @@ impl App {
         }
 
         if radio {
-            c.arg("--no-video");
+            let sock = format!("/tmp/neon-mpv-{}.sock", std::process::id());
+            c.arg("--no-video")
+                .arg("--vo=null")
+                .arg("--force-window=no")
+                .arg("--idle=yes")
+                .arg("--keep-open=yes")
+                .arg(format!("--input-ipc-server={}", sock));
             c.arg(url);
-            c.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
+            c.stdout(Stdio::null()).stdin(Stdio::null());
+            // Redirect stderr to log so failures are visible (not silent)
+            match File::create("/tmp/neon_mpv_stderr.log") {
+                Ok(f) => { c.stderr(Stdio::from(f)); }
+                Err(_) => { c.stderr(Stdio::null()); }
+            }
             #[cfg(unix)]
             unsafe { c.pre_exec(|| { if libc::setsid() == -1 { return Err(std::io::Error::last_os_error()); } Ok(()) }); }
             match c.spawn() {
-                Ok(child) => { self.mpv_handle = Some(child); }
+                Ok(child) => {
+                    self.mpv_handle = Some(child);
+                    let state = Arc::clone(&self.radio_state);
+                    let handle = spawn_ipc_task(sock, state);
+                    self.radio_ipc = Some(handle);
+                    self.radio_station_title = title.to_string();
+                }
                 Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
             }
         } else {
+            c.arg(format!("--title=NEON: {}", display_title))
+                .arg("--ontop")
+                .arg("--force-window=immediate");
             if self.config.video_fullscreen {
                 c.arg("--fs");
             } else {

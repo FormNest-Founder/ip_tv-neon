@@ -122,20 +122,30 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .title(" NIGHT CITY HUB ")
         .border_style(Style::default().fg(theme));
     f.render_widget(block.clone(), size);
-    let area = block.inner(size);
+    let full_area = block.inner(size);
 
-    // Show "Now Playing" overlay while MPV is running
-    if app.mpv_handle.is_some() {
-        let text = "\n\n\n  ▶  NOW PLAYING\n\n  Press Q in MPV to return";
+    // For TV — full-screen "now playing" overlay (mpv has a window, TUI is blocked)
+    if app.mpv_handle.is_some() && app.radio_ipc.is_none() {
+        let text = "\n\n\n  ▶  NOW PLAYING\n\n  Press ESC to stop";
         f.render_widget(
             Paragraph::new(text)
                 .alignment(Alignment::Center)
                 .fg(theme)
                 .bold(),
-            area,
+            full_area,
         );
         return;
     }
+
+    // Split area: main content + optional Now Playing bar (radio mode)
+    let (area, np_area) = if app.radio_ipc.is_some() {
+        let chunks = Layout::default()
+            .constraints([Constraint::Min(0), Constraint::Length(3)])
+            .split(full_area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (full_area, None)
+    };
 
     // ── Screen Dispatch ───────────────────────────────────────────────────
     match &app.screen {
@@ -440,6 +450,60 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             );
         }
     }
+
+    // Now Playing bar — shown at the bottom when radio IPC is active
+    if let Some(np) = np_area {
+        render_now_playing(f, app, np, theme);
+    }
+}
+
+// ─── Now Playing Bar (Radio) ─────────────────────────────────────────────────
+
+fn render_now_playing(f: &mut Frame, app: &App, area: Rect, theme: Color) {
+    let st = app.radio_state.lock().unwrap();
+
+    let status_icon = if st.muted {
+        "🔇"
+    } else if st.paused {
+        "⏸"
+    } else {
+        "▶"
+    };
+
+    let track = if !st.icy_title.is_empty() {
+        st.icy_title.clone()
+    } else if !st.media_title.is_empty() {
+        st.media_title.clone()
+    } else {
+        app.radio_station_title.clone()
+    };
+
+    // Volume bar: 20 chars wide
+    let vol_pct = (st.volume / 100.0).clamp(0.0, 1.0);
+    let filled = (vol_pct * 20.0) as usize;
+    let vol_bar: String = (0..20).map(|i| if i < filled { '█' } else { '░' }).collect();
+
+    let line = Line::from(vec![
+        Span::styled(format!(" {} ", status_icon), Style::default().fg(Color::Green).bold()),
+        Span::styled(&app.radio_station_title, Style::default().fg(theme).bold()),
+        Span::raw("  "),
+        Span::styled(&track, Style::default().fg(Color::White)),
+        Span::raw("  "),
+        Span::styled(format!("Vol [{}] {:.0}%", vol_bar, st.volume), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            "  ↑↓:vol  Space:pause  M:mute  Esc:stop",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    f.render_widget(
+        Paragraph::new(line).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        ),
+        area,
+    );
 }
 
 // ─── Detail Screen ───────────────────────────────────────────────────────────

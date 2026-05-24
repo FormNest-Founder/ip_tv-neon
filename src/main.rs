@@ -17,6 +17,7 @@ mod app;
 mod consts;
 mod epg;
 mod models;
+mod mpv_ipc;
 mod ui;
 mod utils;
 
@@ -74,10 +75,13 @@ async fn main() -> Result<()> {
     loop {
         // (niri suspend/restore removed — TUI stays visible while mpv plays)
 
-        // Check if background MPV (radio) has exited
+        // Check if background MPV has exited
         if let Some(ref mut child) = app.mpv_handle {
             if let Ok(Some(_)) = child.try_wait() {
                 app.mpv_handle = None;
+                app.radio_ipc = None;
+                *app.radio_state.lock().unwrap() = mpv_ipc::RadioState::default();
+                app.radio_station_title.clear();
                 app.needs_redraw = true;
             }
         }
@@ -161,6 +165,11 @@ async fn main() -> Result<()> {
                 app.screen = Screen::MainMenu;
                 app.needs_redraw = true;
             }
+        }
+
+        // Force redraw while radio IPC is active so track/volume update live
+        if app.radio_ipc.is_some() {
+            app.needs_redraw = true;
         }
 
         if app.needs_redraw || last_tick.elapsed() >= tick_rate {
@@ -272,6 +281,36 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         return;
     }
 
+    // Radio controls — handled while mpv is running in background
+    if app.radio_ipc.is_some() {
+        let cur_vol = app.radio_state.lock().unwrap().volume;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('+') => {
+                if let Some(ref ipc) = app.radio_ipc {
+                    ipc.set_volume((cur_vol + 5.0).min(100.0));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('-') => {
+                if let Some(ref ipc) = app.radio_ipc {
+                    ipc.set_volume((cur_vol - 5.0).max(0.0));
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(ref ipc) = app.radio_ipc { ipc.toggle_pause(); }
+            }
+            KeyCode::Char('m') => {
+                let muted = app.radio_state.lock().unwrap().muted;
+                if let Some(ref ipc) = app.radio_ipc { ipc.set_mute(!muted); }
+            }
+            KeyCode::Char('q') | KeyCode::Esc => {
+                app.stop_all();
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // TV/other mpv running — only Esc handled
     if app.mpv_handle.is_some() {
         if key.code == KeyCode::Esc {
             app.stop_all();
