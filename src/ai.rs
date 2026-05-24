@@ -54,6 +54,7 @@ impl LlmProvider {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "gemini" => Self::Gemini,
@@ -404,7 +405,7 @@ async fn chat_gemini(
 // ─── Keywords Extraction ─────────────────────────────────────────────────────
 
 /// Extract "KEYWORDS: ..." line from response, return (clean_text, Option<keywords>)
-fn extract_keywords(text: &str) -> (String, Option<Vec<String>>) {
+pub fn extract_keywords(text: &str) -> (String, Option<Vec<String>>) {
     let mut lines: Vec<&str> = Vec::new();
     let mut keywords: Option<Vec<String>> = None;
 

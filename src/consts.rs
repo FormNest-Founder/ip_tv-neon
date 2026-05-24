@@ -8,13 +8,19 @@ pub const RECOMMENDED_EPG: &str = "https://epg.one/epg.xml.gz";
 
 pub fn get_config_dir() -> PathBuf {
     dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| {
+            eprintln!("[neon-iptv] XDG config dir unavailable, using /tmp/neon-iptv");
+            PathBuf::from("/tmp/neon-iptv")
+        })
         .join("neon-iptv")
 }
 
 pub fn get_cache_dir() -> PathBuf {
     dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| {
+            eprintln!("[neon-iptv] XDG cache dir unavailable, using /tmp/neon-iptv");
+            PathBuf::from("/tmp/neon-iptv")
+        })
         .join("neon-iptv")
 }
 

@@ -21,3 +21,5 @@ jobs:
       - run: cargo check --all-targets
       - run: cargo clippy -- -D warnings
       - run: cargo test --all-targets
+      - run: cargo fmt --check
+      - run: cargo audit || true
