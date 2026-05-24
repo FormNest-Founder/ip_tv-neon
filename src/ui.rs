@@ -805,7 +805,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(status_color).bold(),
         ),
         Span::styled(
-            marquee_slice(&station_display, app.marquee_offset / 3, station_w),
+            marquee_slice(&station_display, app.visuals.marquee_offset / 3, station_w),
             Style::default()
                 .fg(Color::Rgb(0, 240, 255))
                 .add_modifier(Modifier::BOLD),
@@ -826,7 +826,11 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     let track_line = Line::from(vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            marquee_slice(&marquee_text, app.marquee_offset, inner_w.saturating_sub(2)),
+            marquee_slice(
+                &marquee_text,
+                app.visuals.marquee_offset,
+                inner_w.saturating_sub(2),
+            ),
             Style::default().fg(Color::Rgb(200, 220, 255)),
         ),
     ]);
@@ -921,8 +925,8 @@ fn render_vu_meters(f: &mut Frame, app: &App, area: Rect) {
 
         let mut spans = vec![Span::raw(" ")];
         for i in 0..n_bars {
-            let h = app.vu_bars[i];
-            let peak = app.vu_peaks[i];
+            let h = app.visuals.vu_bars[i];
+            let peak = app.visuals.vu_peaks[i];
 
             // Peak indicator: show ▔ in the row where peak sits
             let peak_row_f = (1.0 - peak) * bar_h as f32;

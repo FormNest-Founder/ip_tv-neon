@@ -20,6 +20,30 @@ pub const VU_BARS: usize = 20;
 /// How long a peak indicator stays at max before falling (in ticks at 50ms)
 const PEAK_HOLD_TICKS: u32 = 10;
 
+// ─── Radio Visuals Sub-State ─────────────────────────────────────────────────
+
+pub struct RadioVisuals {
+    pub vu_bars: [f32; VU_BARS],
+    pub vu_peaks: [f32; VU_BARS],
+    pub vu_peak_hold: [u32; VU_BARS],
+    pub radio_start: Option<std::time::Instant>,
+    pub marquee_offset: usize,
+    pub marquee_tick: u32,
+}
+
+impl Default for RadioVisuals {
+    fn default() -> Self {
+        Self {
+            vu_bars: [0.0; VU_BARS],
+            vu_peaks: [0.0; VU_BARS],
+            vu_peak_hold: [0; VU_BARS],
+            radio_start: None,
+            marquee_offset: 0,
+            marquee_tick: 0,
+        }
+    }
+}
+
 // ─── App State ───────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -49,14 +73,7 @@ pub struct App {
     pub radio_ipc: Option<IpcHandle>,
     pub radio_state: SharedRadioState,
     pub radio_station_title: String,
-    // VU-meter simulation state
-    pub vu_bars: [f32; VU_BARS],      // current smoothed bar heights 0..1
-    pub vu_peaks: [f32; VU_BARS],     // peak indicator positions 0..1
-    pub vu_peak_hold: [u32; VU_BARS], // ticks remaining at current peak
-    pub radio_start: Option<Instant>, // when radio started (drives oscillators)
-    // Marquee scroll state
-    pub marquee_offset: usize,
-    pub marquee_tick: u32, // counts 50ms ticks; advance offset every 5 (=250ms)
+    pub visuals: RadioVisuals,
     pub needs_redraw: bool,
     pub debug: bool,
     pub status_msg: Option<String>,
@@ -118,12 +135,7 @@ impl App {
             radio_ipc: None,
             radio_state: Arc::new(Mutex::new(RadioState::default())),
             radio_station_title: String::new(),
-            vu_bars: [0.0; VU_BARS],
-            vu_peaks: [0.0; VU_BARS],
-            vu_peak_hold: [0; VU_BARS],
-            radio_start: None,
-            marquee_offset: 0,
-            marquee_tick: 0,
+            visuals: RadioVisuals::default(),
             needs_redraw: true,
             debug: false,
             status_msg: None,
@@ -203,12 +215,12 @@ impl App {
             .lock()
             .expect("radio_state poisoned in stop_all") = RadioState::default();
         self.radio_station_title.clear();
-        self.radio_start = None;
-        self.vu_bars = [0.0; VU_BARS];
-        self.vu_peaks = [0.0; VU_BARS];
-        self.vu_peak_hold = [0; VU_BARS];
-        self.marquee_offset = 0;
-        self.marquee_tick = 0;
+        self.visuals.radio_start = None;
+        self.visuals.vu_bars = [0.0; VU_BARS];
+        self.visuals.vu_peaks = [0.0; VU_BARS];
+        self.visuals.vu_peak_hold = [0; VU_BARS];
+        self.visuals.marquee_offset = 0;
+        self.visuals.marquee_tick = 0;
     }
 
     // ─── Radio VU + Marquee Tick (called every 50ms) ──────────────────────
@@ -227,6 +239,7 @@ impl App {
         };
 
         let elapsed_s = self
+            .visuals
             .radio_start
             .map(|s| s.elapsed().as_secs_f32())
             .unwrap_or(0.0);
@@ -259,25 +272,30 @@ impl App {
             let target = (bass * w_bass + mid * w_mid + hi * w_high + noise).min(1.0) * amp_scale;
 
             // Low-pass: fast rise, slow decay
-            let alpha = if target > self.vu_bars[i] { 0.6 } else { 0.25 };
-            self.vu_bars[i] = self.vu_bars[i] * (1.0 - alpha) + target * alpha;
+            let alpha = if target > self.visuals.vu_bars[i] {
+                0.6
+            } else {
+                0.25
+            };
+            self.visuals.vu_bars[i] = self.visuals.vu_bars[i] * (1.0 - alpha) + target * alpha;
 
             // Peak: hold then fall slowly
-            if self.vu_bars[i] >= self.vu_peaks[i] {
-                self.vu_peaks[i] = self.vu_bars[i];
-                self.vu_peak_hold[i] = PEAK_HOLD_TICKS;
-            } else if self.vu_peak_hold[i] > 0 {
-                self.vu_peak_hold[i] -= 1;
+            if self.visuals.vu_bars[i] >= self.visuals.vu_peaks[i] {
+                self.visuals.vu_peaks[i] = self.visuals.vu_bars[i];
+                self.visuals.vu_peak_hold[i] = PEAK_HOLD_TICKS;
+            } else if self.visuals.vu_peak_hold[i] > 0 {
+                self.visuals.vu_peak_hold[i] -= 1;
             } else {
-                self.vu_peaks[i] = (self.vu_peaks[i] - 0.03).max(self.vu_bars[i]);
+                self.visuals.vu_peaks[i] =
+                    (self.visuals.vu_peaks[i] - 0.03).max(self.visuals.vu_bars[i]);
             }
         }
 
         // Marquee: advance 1 char every 5 ticks (≈250ms)
-        self.marquee_tick += 1;
-        if self.marquee_tick >= 5 {
-            self.marquee_tick = 0;
-            self.marquee_offset += 1;
+        self.visuals.marquee_tick += 1;
+        if self.visuals.marquee_tick >= 5 {
+            self.visuals.marquee_tick = 0;
+            self.visuals.marquee_offset += 1;
         }
     }
 
@@ -430,7 +448,7 @@ impl App {
                     let handle = spawn_ipc_task(sock, state);
                     self.radio_ipc = Some(handle);
                     self.radio_station_title = title.to_string();
-                    self.radio_start = Some(Instant::now());
+                    self.visuals.radio_start = Some(Instant::now());
                 }
                 Err(e) => {
                     self.status_msg = Some(format!("MPV error: {}", e));
