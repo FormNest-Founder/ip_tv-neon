@@ -181,7 +181,9 @@ impl App {
             }
         }
         if dirty {
-            let _ = self.config.save();
+            if let Err(e) = self.config.save() {
+                main_log(&format!("[config] save failed: {e}"));
+            }
         }
     }
 
@@ -196,7 +198,10 @@ impl App {
             let _ = child.start_kill();
         }
         self.suspended = false;
-        *self.radio_state.lock().unwrap() = RadioState::default();
+        *self
+            .radio_state
+            .lock()
+            .expect("radio_state poisoned in stop_all") = RadioState::default();
         self.radio_station_title.clear();
         self.radio_start = None;
         self.vu_bars = [0.0; VU_BARS];
@@ -214,7 +219,10 @@ impl App {
         use rand::Rng;
 
         let (paused, muted, volume) = {
-            let st = self.radio_state.lock().unwrap();
+            let st = self
+                .radio_state
+                .lock()
+                .expect("radio_state poisoned in tick_radio");
             (st.paused, st.muted, st.volume)
         };
 
@@ -606,7 +614,9 @@ impl App {
             6 => self.config.local_dir = val.to_string(),
             _ => {}
         }
-        let _ = self.config.save();
+        if let Err(e) = self.config.save() {
+            self.status_msg = Some(format!("Save failed: {e}"));
+        }
     }
 
     pub fn settings_toggle(&mut self, idx: usize) {
@@ -614,7 +624,9 @@ impl App {
         match idx {
             2 => {
                 self.config.video_fullscreen = !self.config.video_fullscreen;
-                let _ = self.config.save();
+                if let Err(e) = self.config.save() {
+                    main_log(&format!("[config] save failed: {e}"));
+                }
             }
             4 => {
                 let cur = self.config.theme_color;
@@ -625,21 +637,29 @@ impl App {
                 let next = (pos + 1) % THEME_PRESETS.len();
                 let p = THEME_PRESETS[next];
                 self.config.theme_color = (p.0, p.1, p.2);
-                let _ = self.config.save();
+                if let Err(e) = self.config.save() {
+                    main_log(&format!("[config] save failed: {e}"));
+                }
             }
             5 => {
                 let cur = crate::ai::LlmProvider::from_str(&self.config.llm_provider);
                 self.config.llm_provider = cur.next().name().to_lowercase().to_string();
-                let _ = self.config.save();
+                if let Err(e) = self.config.save() {
+                    main_log(&format!("[config] save failed: {e}"));
+                }
             }
             7 => {
                 self.config.history.clear();
-                let _ = self.config.save();
+                if let Err(e) = self.config.save() {
+                    main_log(&format!("[config] save failed: {e}"));
+                }
                 self.status_msg = Some("History cleared".into());
             }
             8 => {
                 self.config.favorites.clear();
-                let _ = self.config.save();
+                if let Err(e) = self.config.save() {
+                    main_log(&format!("[config] save failed: {e}"));
+                }
                 self.status_msg = Some("Favorites cleared".into());
             }
             _ => {}

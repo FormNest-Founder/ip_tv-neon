@@ -160,7 +160,9 @@ fn handle_event(text: &str, state: &SharedRadioState) {
     };
     let data = &v["data"];
 
-    let mut st = state.lock().unwrap();
+    let mut st = state
+        .lock()
+        .expect("radio_state poisoned in handle_mpv_event");
     match name {
         "volume" => {
             if let Some(vol) = data.as_f64() {

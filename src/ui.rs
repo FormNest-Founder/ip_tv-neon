@@ -723,7 +723,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     // Snapshot IPC state (lock once, release before rendering)
     let (paused, muted, volume, media_title, icy_name, meta_artist, meta_track, bitrate_kbps) = {
-        let st = app.radio_state.lock().unwrap();
+        let st = app.radio_state.lock().unwrap_or_else(|e| e.into_inner());
         (
             st.paused,
             st.muted,

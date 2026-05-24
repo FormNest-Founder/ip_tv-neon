@@ -102,7 +102,9 @@ async fn main() -> Result<()> {
             if let Ok(Some(_)) = child.try_wait() {
                 app.mpv_handle = None;
                 app.radio_ipc = None;
-                *app.radio_state.lock().unwrap() = mpv_ipc::RadioState::default();
+                *app.radio_state
+                    .lock()
+                    .expect("radio_state poisoned in mpv exit") = mpv_ipc::RadioState::default();
                 app.radio_station_title.clear();
                 app.needs_redraw = true;
             }
@@ -252,7 +254,11 @@ async fn main() -> Result<()> {
                                 KeyCode::Backspace => {
                                     app.ai_query.pop();
                                 }
-                                KeyCode::Enter if !app.ai_query.is_empty() && !app.ai_loading => {
+                                KeyCode::Enter
+                                    if !app.ai_query.is_empty()
+                                        && !app.ai_loading
+                                        && ai_task.is_none() =>
+                                {
                                     let msg = app.ai_query.drain(..).collect::<String>();
                                     app.ai_chat_history.push(ai::ChatMsg {
                                         is_user: true,
@@ -346,7 +352,11 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
     // Up/Down are NOT consumed here — they fall through to normal screen handlers
     // so the station list remains navigable while radio plays.
     if app.radio_ipc.is_some() {
-        let cur_vol = app.radio_state.lock().unwrap().volume;
+        let cur_vol = app
+            .radio_state
+            .lock()
+            .expect("radio_state poisoned in vol key")
+            .volume;
         match key.code {
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 if let Some(ref ipc) = app.radio_ipc {
@@ -367,7 +377,11 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                 return;
             }
             KeyCode::Char('m') => {
-                let muted = app.radio_state.lock().unwrap().muted;
+                let muted = app
+                    .radio_state
+                    .lock()
+                    .expect("radio_state poisoned in mute key")
+                    .muted;
                 if let Some(ref ipc) = app.radio_ipc {
                     ipc.set_mute(!muted);
                 }

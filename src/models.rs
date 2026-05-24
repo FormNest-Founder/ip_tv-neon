@@ -1,4 +1,5 @@
 use crate::consts::*;
+use crate::utils::main_log;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -92,7 +93,9 @@ impl Config {
         if !name.is_empty() {
             self.channel_names.insert(url.to_string(), name.to_string());
         }
-        let _ = self.save();
+        if let Err(e) = self.save() {
+            main_log(&format!("[config] save failed: {e}"));
+        }
     }
 
     pub fn favorite_add(&mut self, url: &str, name: &str) {
@@ -100,13 +103,17 @@ impl Config {
         if !name.is_empty() {
             self.channel_names.insert(url.to_string(), name.to_string());
         }
-        let _ = self.save();
+        if let Err(e) = self.save() {
+            main_log(&format!("[config] save failed: {e}"));
+        }
     }
 
     pub fn favorite_remove(&mut self, url: &str) {
         self.favorites.remove(url);
         // Не удаляем из channel_names — может пригодиться для истории
-        let _ = self.save();
+        if let Err(e) = self.save() {
+            main_log(&format!("[config] save failed: {e}"));
+        }
     }
 
     /// Получить имя канала: сначала из кеша, потом fallback на URL
