@@ -140,24 +140,24 @@ async fn main() -> Result<()> {
         if ai_task.as_ref().is_some_and(|t| t.is_finished()) {
             if let Some(task) = ai_task.take() {
                 if let Ok(response) = task.await {
-                    app.ai_chat_history.push(ai::ChatMsg {
+                    app.ai.chat_history.push(ai::ChatMsg {
                         is_user: false,
                         text: response.text,
                     });
                     if let Some(ref kw) = response.keywords {
                         let now = chrono::Utc::now().timestamp();
-                        app.ai_results = ai::search_epg(&app.data, kw, now);
-                        app.ai_state.select(if app.ai_results.is_empty() {
+                        app.ai.results = ai::search_epg(&app.data, kw, now);
+                        app.ai_state.select(if app.ai.results.is_empty() {
                             None
                         } else {
                             Some(0)
                         });
-                        if !app.ai_results.is_empty() {
-                            app.ai_focus_results = true;
+                        if !app.ai.results.is_empty() {
+                            app.ai.focus_results = true;
                         }
                     }
-                    app.ai_loading = false;
-                    app.ai_chat_scroll = 0;
+                    app.ai.loading = false;
+                    app.ai.chat_scroll = 0;
                     app.needs_redraw = true;
                 }
             }
@@ -214,32 +214,32 @@ async fn main() -> Result<()> {
                 // AI chat needs http_client and ai_task — handle inline
                 let handled = match app.screen {
                     Screen::AiChat => {
-                        if app.ai_focus_results {
+                        if app.ai.focus_results {
                             match key.code {
-                                KeyCode::Up => nav_up(&mut app.ai_state, app.ai_results.len()),
-                                KeyCode::Down => nav_down(&mut app.ai_state, app.ai_results.len()),
+                                KeyCode::Up => nav_up(&mut app.ai_state, app.ai.results.len()),
+                                KeyCode::Down => nav_down(&mut app.ai_state, app.ai.results.len()),
                                 KeyCode::Enter => app.ai_play_selected(),
                                 KeyCode::Char('d') => {
                                     if let Some(idx) = app.ai_state.selected() {
-                                        if idx < app.ai_results.len() {
-                                            app.open_detail(app.ai_results[idx].channel_idx);
+                                        if idx < app.ai.results.len() {
+                                            app.open_detail(app.ai.results[idx].channel_idx);
                                         }
                                     }
                                 }
                                 KeyCode::Char(c)
                                     if !key.modifiers.contains(KeyModifiers::CONTROL) =>
                                 {
-                                    app.ai_focus_results = false;
-                                    app.ai_query.push(c);
+                                    app.ai.focus_results = false;
+                                    app.ai.query.push(c);
                                 }
                                 KeyCode::Backspace => {
-                                    app.ai_focus_results = false;
+                                    app.ai.focus_results = false;
                                 }
                                 KeyCode::Tab => {
-                                    app.ai_focus_results = false;
+                                    app.ai.focus_results = false;
                                 }
                                 KeyCode::Esc => {
-                                    app.ai_loading = false;
+                                    app.ai.loading = false;
                                     app.screen = Screen::MainMenu;
                                 }
                                 _ => {}
@@ -249,25 +249,25 @@ async fn main() -> Result<()> {
                                 KeyCode::Char(c)
                                     if !key.modifiers.contains(KeyModifiers::CONTROL) =>
                                 {
-                                    app.ai_query.push(c);
+                                    app.ai.query.push(c);
                                 }
                                 KeyCode::Backspace => {
-                                    app.ai_query.pop();
+                                    app.ai.query.pop();
                                 }
                                 KeyCode::Enter
-                                    if !app.ai_query.is_empty()
-                                        && !app.ai_loading
+                                    if !app.ai.query.is_empty()
+                                        && !app.ai.loading
                                         && ai_task.is_none() =>
                                 {
-                                    let msg = app.ai_query.drain(..).collect::<String>();
-                                    app.ai_chat_history.push(ai::ChatMsg {
+                                    let msg = app.ai.query.drain(..).collect::<String>();
+                                    app.ai.chat_history.push(ai::ChatMsg {
                                         is_user: true,
                                         text: msg.clone(),
                                     });
-                                    app.ai_loading = true;
-                                    app.ai_chat_scroll = 0;
+                                    app.ai.loading = true;
+                                    app.ai.chat_scroll = 0;
                                     let client = http_client.clone();
-                                    let history = app.ai_chat_history.clone();
+                                    let history = app.ai.chat_history.clone();
                                     let context = ai::build_context(
                                         &app.data,
                                         &app.config.history,
@@ -286,11 +286,11 @@ async fn main() -> Result<()> {
                                         .await
                                     }));
                                 }
-                                KeyCode::Tab if !app.ai_results.is_empty() => {
-                                    app.ai_focus_results = true;
+                                KeyCode::Tab if !app.ai.results.is_empty() => {
+                                    app.ai.focus_results = true;
                                 }
                                 KeyCode::Esc => {
-                                    app.ai_loading = false;
+                                    app.ai.loading = false;
                                     app.screen = Screen::MainMenu;
                                 }
                                 _ => {}
@@ -427,11 +427,11 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     app.screen = Screen::LocalList;
                 }
                 3 => {
-                    app.ai_query.clear();
-                    app.ai_results.clear();
-                    app.ai_chat_history.clear();
-                    app.ai_focus_results = false;
-                    app.ai_chat_scroll = 0;
+                    app.ai.query.clear();
+                    app.ai.results.clear();
+                    app.ai.chat_history.clear();
+                    app.ai.focus_results = false;
+                    app.ai.chat_scroll = 0;
                     app.screen = Screen::AiChat;
                 }
                 4 => {

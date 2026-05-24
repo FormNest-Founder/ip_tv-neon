@@ -54,6 +54,18 @@ pub struct DetailState {
     pub return_screen: Option<Screen>,
 }
 
+// ─── AI Chat Sub-State ───────────────────────────────────────────────────────
+
+#[derive(Default)]
+pub struct AiState {
+    pub query: String,
+    pub results: Vec<AiSearchResult>,
+    pub loading: bool,
+    pub chat_history: Vec<ChatMsg>,
+    pub focus_results: bool,
+    pub chat_scroll: u16,
+}
+
 // ─── App State ───────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -88,14 +100,8 @@ pub struct App {
     pub debug: bool,
     pub status_msg: Option<String>,
     pub detail: DetailState,
-    // AI Chat
-    pub ai_query: String,
-    pub ai_results: Vec<AiSearchResult>,
     pub ai_state: ListState,
-    pub ai_loading: bool,
-    pub ai_chat_history: Vec<ChatMsg>,
-    pub ai_focus_results: bool,
-    pub ai_chat_scroll: u16,
+    pub ai: AiState,
 }
 
 // ─── Constructor & Data Loading ──────────────────────────────────────────────
@@ -147,13 +153,8 @@ impl App {
             debug: false,
             status_msg: None,
             detail: DetailState::default(),
-            ai_query: String::new(),
-            ai_results: Vec::new(),
             ai_state: ListState::default(),
-            ai_loading: false,
-            ai_chat_history: Vec::new(),
-            ai_focus_results: false,
-            ai_chat_scroll: 0,
+            ai: AiState::default(),
         };
         app.m_state.select(Some(0));
         app.cat_state.select(Some(0));
@@ -496,10 +497,10 @@ impl App {
 
     pub fn ai_play_selected(&mut self) {
         let idx = match self.ai_state.selected() {
-            Some(i) if i < self.ai_results.len() => i,
+            Some(i) if i < self.ai.results.len() => i,
             _ => return,
         };
-        let result = self.ai_results[idx].clone();
+        let result = self.ai.results[idx].clone();
         if result.channel_idx >= self.data.channels.len() {
             return;
         }

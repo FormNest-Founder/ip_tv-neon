@@ -1223,8 +1223,8 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    if app.ai_results.is_empty() {
-        let hint = if app.ai_chat_history.is_empty() {
+    if app.ai.results.is_empty() {
+        let hint = if app.ai.chat_history.is_empty() {
             "  Ask something — results will appear here"
         } else {
             "  No results for this query"
@@ -1241,7 +1241,8 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
     } else {
         let now = Utc::now().timestamp();
         let items: Vec<ListItem> = app
-            .ai_results
+            .ai
+            .results
             .iter()
             .map(|r| {
                 let mut spans: Vec<Span> = Vec::new();
@@ -1290,12 +1291,12 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
             })
             .collect();
 
-        let title = format!(" Results ({}) ", app.ai_results.len());
+        let title = format!(" Results ({}) ", app.ai.results.len());
         let results_block = Block::default()
             .title(title)
             .title_bottom(Line::from(" Enter: play | D: detail | Tab: chat ").fg(Color::DarkGray))
             .borders(Borders::ALL)
-            .border_style(focus_border(app.ai_focus_results));
+            .border_style(focus_border(app.ai.focus_results));
         let list = List::new(items).block(results_block).highlight_style(
             Style::default()
                 .bg(Color::Rgb(40, 0, 40))
@@ -1314,7 +1315,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         .split(main_chunks[1]);
 
     let mut chat_lines: Vec<Line> = Vec::new();
-    for msg in &app.ai_chat_history {
+    for msg in &app.ai.chat_history {
         if msg.is_user {
             chat_lines.push(Line::from(vec![
                 Span::styled("You: ", Style::default().fg(theme).bold()),
@@ -1330,7 +1331,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         }
         chat_lines.push(Line::from(""));
     }
-    if app.ai_loading {
+    if app.ai.loading {
         chat_lines.push(Line::from(Span::styled(
             "  Thinking...",
             Style::default()
@@ -1364,14 +1365,14 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
                 Block::default()
                     .title(" Chat ")
                     .borders(Borders::ALL)
-                    .border_style(focus_border(!app.ai_focus_results)),
+                    .border_style(focus_border(!app.ai.focus_results)),
             ),
         bottom_chunks[0],
     );
 
-    let input_border = if app.ai_loading { Color::Yellow } else { theme };
+    let input_border = if app.ai.loading { Color::Yellow } else { theme };
     f.render_widget(
-        Paragraph::new(format!(" > {}", app.ai_query)).block(
+        Paragraph::new(format!(" > {}", app.ai.query)).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(input_border)),
@@ -1379,7 +1380,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         bottom_chunks[1],
     );
 
-    let hint = if app.ai_focus_results {
+    let hint = if app.ai.focus_results {
         " Enter: play | D: details | Tab: chat | ESC: back "
     } else {
         " Enter: send | Tab: results | ESC: back "
