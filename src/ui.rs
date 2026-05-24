@@ -16,8 +16,8 @@ const NEON_DIM: Color = Color::Rgb(40, 0, 60);
 // ─── Radio player height (compact, AIMP-style) ───────────────────────────────
 
 /// Height of the compact neon radio widget in lines (including its border).
-/// VU rows = RADIO_PANEL_H - 6 (header + station + track + controls + border top/bottom)
-const RADIO_PANEL_H: u16 = 12;
+/// VU rows = RADIO_PANEL_H - 7 (border×2 + station + track + vu + controls + hint)
+const RADIO_PANEL_H: u16 = 13;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
