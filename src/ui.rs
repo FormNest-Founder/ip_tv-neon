@@ -441,7 +441,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             ];
             let list = List::new(items.map(|s| ListItem::new(s).style(Style::default().fg(theme))))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, chunks[1], &mut app.m_state);
+            f.render_stateful_widget(list, chunks[1], &mut app.nav.m_state);
             if let Some(msg) = &app.status_msg {
                 let color = if msg.starts_with("Update failed") {
                     Color::Red
@@ -478,7 +478,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.cat_state);
+            f.render_stateful_widget(list, content_area, &mut app.nav.cat_state);
         }
 
         Screen::ChanList => {
@@ -487,6 +487,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .split(content_area);
             let now = Utc::now().timestamp();
             let items: Vec<ListItem> = app
+                .nav
                 .filtered
                 .iter()
                 .map(|&idx| {
@@ -536,7 +537,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
-            let title = format!(" {} ({}) ", app.selected_group, app.filtered.len());
+            let title = format!(" {} ({}) ", app.nav.selected_group, app.nav.filtered.len());
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
                 .highlight_style(
@@ -545,9 +546,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .fg(Color::Cyan)
                         .bold(),
                 );
-            f.render_stateful_widget(list, chunks[0], &mut app.ch_state);
+            f.render_stateful_widget(list, chunks[0], &mut app.nav.ch_state);
             f.render_widget(
-                Paragraph::new(format!(" SEARCH: {}", app.search)).block(
+                Paragraph::new(format!(" SEARCH: {}", app.nav.search)).block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Yellow)),
@@ -583,11 +584,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.r_cat_state);
+            f.render_stateful_widget(list, content_area, &mut app.nav.r_cat_state);
         }
 
         Screen::RadioList => {
             let items: Vec<ListItem> = app
+                .nav
                 .filtered_radio
                 .iter()
                 .map(|&idx| {
@@ -606,8 +608,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .collect();
             let title = format!(
                 " Radio: {} ({}) ",
-                app.selected_radio_genre,
-                app.filtered_radio.len()
+                app.nav.selected_radio_genre,
+                app.nav.filtered_radio.len()
             );
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
@@ -617,7 +619,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .fg(Color::Green)
                         .bold(),
                 );
-            f.render_stateful_widget(list, content_area, &mut app.r_state);
+            f.render_stateful_widget(list, content_area, &mut app.nav.r_state);
         }
 
         Screen::Favorites => {
@@ -637,7 +639,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.fav_state);
+            f.render_stateful_widget(list, content_area, &mut app.nav.fav_state);
         }
 
         Screen::History => {
@@ -659,7 +661,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.hist_state);
+            f.render_stateful_widget(list, content_area, &mut app.nav.hist_state);
         }
 
         Screen::Settings => {
@@ -692,7 +694,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.d_state);
+            f.render_stateful_widget(list, content_area, &mut app.nav.d_state);
         }
 
         Screen::Detail => {
@@ -1104,10 +1106,10 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
                     .fg(Color::Cyan)
                     .bold(),
             );
-        f.render_stateful_widget(list, chunks[1], &mut app.epg_state);
+        f.render_stateful_widget(list, chunks[1], &mut app.nav.epg_state);
     }
 
-    let desc_text = if let Some(idx) = app.epg_state.selected() {
+    let desc_text = if let Some(idx) = app.nav.epg_state.selected() {
         if idx < app.detail.programs.len() {
             let p = &app.detail.programs[idx];
             if p.desc.is_empty() {
@@ -1163,7 +1165,7 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
             let label = SETTINGS_LABELS[i];
             let val = app.settings_value(i);
             let is_editing = editing == Some(i);
-            let display_val = if is_editing { &app.edit_buf } else { &val };
+            let display_val = if is_editing { &app.nav.edit_buf } else { &val };
             let style = if is_editing {
                 Style::default().fg(Color::Black).bg(Color::Yellow)
             } else {
@@ -1189,7 +1191,7 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-    f.render_stateful_widget(list, chunks[0], &mut app.set_state);
+    f.render_stateful_widget(list, chunks[0], &mut app.nav.set_state);
 
     let hint = if editing.is_some() {
         " Type to edit | Enter: save | ESC: cancel "
@@ -1303,7 +1305,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
                 .fg(Color::Magenta)
                 .bold(),
         );
-        f.render_stateful_widget(list, main_chunks[0], &mut app.ai_state);
+        f.render_stateful_widget(list, main_chunks[0], &mut app.nav.ai_state);
     }
 
     let bottom_chunks = Layout::default()

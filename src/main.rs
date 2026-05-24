@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
                     if let Some(ref kw) = response.keywords {
                         let now = chrono::Utc::now().timestamp();
                         app.ai.results = ai::search_epg(&app.data, kw, now);
-                        app.ai_state.select(if app.ai.results.is_empty() {
+                        app.nav.ai_state.select(if app.ai.results.is_empty() {
                             None
                         } else {
                             Some(0)
@@ -216,11 +216,13 @@ async fn main() -> Result<()> {
                     Screen::AiChat => {
                         if app.ai.focus_results {
                             match key.code {
-                                KeyCode::Up => nav_up(&mut app.ai_state, app.ai.results.len()),
-                                KeyCode::Down => nav_down(&mut app.ai_state, app.ai.results.len()),
+                                KeyCode::Up => nav_up(&mut app.nav.ai_state, app.ai.results.len()),
+                                KeyCode::Down => {
+                                    nav_down(&mut app.nav.ai_state, app.ai.results.len())
+                                }
                                 KeyCode::Enter => app.ai_play_selected(),
                                 KeyCode::Char('d') => {
-                                    if let Some(idx) = app.ai_state.selected() {
+                                    if let Some(idx) = app.nav.ai_state.selected() {
                                         if idx < app.ai.results.len() {
                                             app.open_detail(app.ai.results[idx].channel_idx);
                                         }
@@ -407,13 +409,13 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         Screen::MainMenu => match key.code {
             KeyCode::Up => {
                 app.status_msg = None;
-                nav_up(&mut app.m_state, MENU_ITEMS);
+                nav_up(&mut app.nav.m_state, MENU_ITEMS);
             }
             KeyCode::Down => {
                 app.status_msg = None;
-                nav_down(&mut app.m_state, MENU_ITEMS);
+                nav_down(&mut app.nav.m_state, MENU_ITEMS);
             }
-            KeyCode::Enter => match app.m_state.selected().unwrap_or(0) {
+            KeyCode::Enter => match app.nav.m_state.selected().unwrap_or(0) {
                 0 => app.screen = Screen::CatList,
                 1 => app.screen = Screen::RadioCatList,
                 2 => {
@@ -423,7 +425,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                             .await
                             .unwrap_or_default();
                     app.local_files = files;
-                    app.d_state.select(Some(0));
+                    app.nav.d_state.select(Some(0));
                     app.screen = Screen::LocalList;
                 }
                 3 => {
@@ -435,11 +437,11 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     app.screen = Screen::AiChat;
                 }
                 4 => {
-                    app.fav_state.select(Some(0));
+                    app.nav.fav_state.select(Some(0));
                     app.screen = Screen::Favorites;
                 }
                 5 => {
-                    app.hist_state.select(Some(0));
+                    app.nav.hist_state.select(Some(0));
                     app.screen = Screen::History;
                 }
                 6 => app.stop_all(),
@@ -458,13 +460,13 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         Screen::Updating => {}
 
         Screen::CatList => match key.code {
-            KeyCode::Up => nav_up(&mut app.cat_state, app.data.groups.len()),
-            KeyCode::Down => nav_down(&mut app.cat_state, app.data.groups.len()),
+            KeyCode::Up => nav_up(&mut app.nav.cat_state, app.data.groups.len()),
+            KeyCode::Down => nav_down(&mut app.nav.cat_state, app.data.groups.len()),
             KeyCode::Enter => {
-                if let Some(idx) = app.cat_state.selected() {
+                if let Some(idx) = app.nav.cat_state.selected() {
                     if idx < app.data.groups.len() {
-                        app.selected_group = app.data.groups[idx].clone();
-                        app.search.clear();
+                        app.nav.selected_group = app.data.groups[idx].clone();
+                        app.nav.search.clear();
                         app.update_filter();
                         app.screen = Screen::ChanList;
                     }
@@ -475,19 +477,19 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::ChanList => match key.code {
-            KeyCode::Up => nav_up(&mut app.ch_state, app.filtered.len()),
-            KeyCode::Down => nav_down(&mut app.ch_state, app.filtered.len()),
+            KeyCode::Up => nav_up(&mut app.nav.ch_state, app.nav.filtered.len()),
+            KeyCode::Down => nav_down(&mut app.nav.ch_state, app.nav.filtered.len()),
             KeyCode::Enter => {
-                if let Some(idx) = app.ch_state.selected() {
-                    if idx < app.filtered.len() {
-                        app.open_detail(app.filtered[idx]);
+                if let Some(idx) = app.nav.ch_state.selected() {
+                    if idx < app.nav.filtered.len() {
+                        app.open_detail(app.nav.filtered[idx]);
                     }
                 }
             }
             KeyCode::Char('f') => {
-                if let Some(idx) = app.ch_state.selected() {
-                    if idx < app.filtered.len() {
-                        let ch = &app.data.channels[app.filtered[idx]];
+                if let Some(idx) = app.nav.ch_state.selected() {
+                    if idx < app.nav.filtered.len() {
+                        let ch = &app.data.channels[app.nav.filtered[idx]];
                         let url = ch.url.clone();
                         let name = ch.name.clone();
                         if app.config.favorites.contains(&url) {
@@ -499,27 +501,27 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                 }
             }
             KeyCode::Char(c) => {
-                app.search.push(c);
+                app.nav.search.push(c);
                 app.update_filter();
             }
             KeyCode::Backspace => {
-                app.search.pop();
+                app.nav.search.pop();
                 app.update_filter();
             }
             KeyCode::Esc => {
-                app.search.clear();
+                app.nav.search.clear();
                 app.screen = Screen::CatList;
             }
             _ => {}
         },
 
         Screen::RadioCatList => match key.code {
-            KeyCode::Up => nav_up(&mut app.r_cat_state, app.data.radio_groups.len()),
-            KeyCode::Down => nav_down(&mut app.r_cat_state, app.data.radio_groups.len()),
+            KeyCode::Up => nav_up(&mut app.nav.r_cat_state, app.data.radio_groups.len()),
+            KeyCode::Down => nav_down(&mut app.nav.r_cat_state, app.data.radio_groups.len()),
             KeyCode::Enter => {
-                if let Some(idx) = app.r_cat_state.selected() {
+                if let Some(idx) = app.nav.r_cat_state.selected() {
                     if idx < app.data.radio_groups.len() {
-                        app.selected_radio_genre = app.data.radio_groups[idx].clone();
+                        app.nav.selected_radio_genre = app.data.radio_groups[idx].clone();
                         app.update_radio_filter();
                         app.screen = Screen::RadioList;
                     }
@@ -530,13 +532,13 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::RadioList => match key.code {
-            KeyCode::Up => nav_up(&mut app.r_state, app.filtered_radio.len()),
-            KeyCode::Down => nav_down(&mut app.r_state, app.filtered_radio.len()),
+            KeyCode::Up => nav_up(&mut app.nav.r_state, app.nav.filtered_radio.len()),
+            KeyCode::Down => nav_down(&mut app.nav.r_state, app.nav.filtered_radio.len()),
             KeyCode::Enter => {
-                if let Some(idx) = app.r_state.selected() {
-                    if idx < app.filtered_radio.len() {
+                if let Some(idx) = app.nav.r_state.selected() {
+                    if idx < app.nav.filtered_radio.len() {
                         let (url, title, track) = {
-                            let st = &app.data.radio[app.filtered_radio[idx]];
+                            let st = &app.data.radio[app.nav.filtered_radio[idx]];
                             (
                                 st.stream.clone(),
                                 st.title.clone(),
@@ -552,10 +554,10 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::Favorites => match key.code {
-            KeyCode::Up => nav_up(&mut app.fav_state, app.config.favorites.len()),
-            KeyCode::Down => nav_down(&mut app.fav_state, app.config.favorites.len()),
+            KeyCode::Up => nav_up(&mut app.nav.fav_state, app.config.favorites.len()),
+            KeyCode::Down => nav_down(&mut app.nav.fav_state, app.config.favorites.len()),
             KeyCode::Enter => {
-                if let Some(idx) = app.fav_state.selected() {
+                if let Some(idx) = app.nav.fav_state.selected() {
                     let favs = app.sorted_favorites();
                     if idx < favs.len() {
                         let url = favs[idx].clone();
@@ -570,10 +572,10 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::History => match key.code {
-            KeyCode::Up => nav_up(&mut app.hist_state, app.config.history.len()),
-            KeyCode::Down => nav_down(&mut app.hist_state, app.config.history.len()),
+            KeyCode::Up => nav_up(&mut app.nav.hist_state, app.config.history.len()),
+            KeyCode::Down => nav_down(&mut app.nav.hist_state, app.config.history.len()),
             KeyCode::Enter => {
-                if let Some(idx) = app.hist_state.selected() {
+                if let Some(idx) = app.nav.hist_state.selected() {
                     let history: Vec<_> = app.config.history.iter().rev().collect();
                     if idx < history.len() {
                         let url = history[idx].clone();
@@ -588,13 +590,13 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::Settings => match key.code {
-            KeyCode::Up => nav_up(&mut app.set_state, SETTINGS_COUNT),
-            KeyCode::Down => nav_down(&mut app.set_state, SETTINGS_COUNT),
+            KeyCode::Up => nav_up(&mut app.nav.set_state, SETTINGS_COUNT),
+            KeyCode::Down => nav_down(&mut app.nav.set_state, SETTINGS_COUNT),
             KeyCode::Enter => {
-                let idx = app.set_state.selected().unwrap_or(0);
+                let idx = app.nav.set_state.selected().unwrap_or(0);
                 match idx {
                     0 | 1 | 3 | 6 => {
-                        app.edit_buf = app.settings_value(idx);
+                        app.nav.edit_buf = app.settings_value(idx);
                         app.screen = Screen::SettingsEdit(idx);
                     }
                     2 | 4 | 5 | 7 | 8 => {
@@ -608,26 +610,26 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::SettingsEdit(field) => match key.code {
-            KeyCode::Char(c) => app.edit_buf.push(c),
+            KeyCode::Char(c) => app.nav.edit_buf.push(c),
             KeyCode::Backspace => {
-                app.edit_buf.pop();
+                app.nav.edit_buf.pop();
             }
             KeyCode::Enter => {
-                let val = app.edit_buf.clone();
+                let val = app.nav.edit_buf.clone();
                 app.settings_apply(field, &val);
                 app.status_msg = Some("Saved".into());
                 app.screen = Screen::Settings;
             }
             KeyCode::Esc => {
-                app.edit_buf.clear();
+                app.nav.edit_buf.clear();
                 app.screen = Screen::Settings;
             }
             _ => {}
         },
 
         Screen::Detail => match key.code {
-            KeyCode::Up => nav_up(&mut app.epg_state, app.detail.programs.len()),
-            KeyCode::Down => nav_down(&mut app.epg_state, app.detail.programs.len()),
+            KeyCode::Up => nav_up(&mut app.nav.epg_state, app.detail.programs.len()),
+            KeyCode::Down => nav_down(&mut app.nav.epg_state, app.detail.programs.len()),
             KeyCode::Enter => app.detail_play_selected(),
             KeyCode::Char('l') => app.detail_play_live(),
             KeyCode::Char('f') => {

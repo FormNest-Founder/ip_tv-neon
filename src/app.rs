@@ -66,12 +66,10 @@ pub struct AiState {
     pub chat_scroll: u16,
 }
 
-// ─── App State ───────────────────────────────────────────────────────────────
+// ─── Navigation Sub-State ────────────────────────────────────────────────────
 
-pub struct App {
-    pub config: Config,
-    pub data: AppData,
-    pub screen: Screen,
+#[derive(Default)]
+pub struct NavState {
     pub m_state: ListState,
     pub cat_state: ListState,
     pub ch_state: ListState,
@@ -82,12 +80,22 @@ pub struct App {
     pub hist_state: ListState,
     pub set_state: ListState,
     pub epg_state: ListState,
+    pub ai_state: ListState,
     pub filtered: Vec<usize>,
     pub filtered_radio: Vec<usize>,
     pub selected_group: String,
     pub selected_radio_genre: String,
     pub search: String,
     pub edit_buf: String,
+}
+
+// ─── App State ───────────────────────────────────────────────────────────────
+
+pub struct App {
+    pub config: Config,
+    pub data: AppData,
+    pub screen: Screen,
+    pub nav: NavState,
     pub quit: bool,
     pub suspended: bool,
     pub local_files: Vec<PathBuf>,
@@ -100,7 +108,6 @@ pub struct App {
     pub debug: bool,
     pub status_msg: Option<String>,
     pub detail: DetailState,
-    pub ai_state: ListState,
     pub ai: AiState,
 }
 
@@ -125,22 +132,7 @@ impl App {
             config,
             data,
             screen: Screen::MainMenu,
-            m_state: ListState::default(),
-            cat_state: ListState::default(),
-            ch_state: ListState::default(),
-            r_state: ListState::default(),
-            r_cat_state: ListState::default(),
-            d_state: ListState::default(),
-            fav_state: ListState::default(),
-            hist_state: ListState::default(),
-            set_state: ListState::default(),
-            epg_state: ListState::default(),
-            filtered: Vec::new(),
-            filtered_radio: Vec::new(),
-            selected_group: String::new(),
-            selected_radio_genre: String::new(),
-            search: String::new(),
-            edit_buf: String::new(),
+            nav: NavState::default(),
             quit: false,
             suspended: false,
             local_files: Vec::new(),
@@ -153,13 +145,12 @@ impl App {
             debug: false,
             status_msg: None,
             detail: DetailState::default(),
-            ai_state: ListState::default(),
             ai: AiState::default(),
         };
-        app.m_state.select(Some(0));
-        app.cat_state.select(Some(0));
-        app.r_cat_state.select(Some(0));
-        app.set_state.select(Some(0));
+        app.nav.m_state.select(Some(0));
+        app.nav.cat_state.select(Some(0));
+        app.nav.r_cat_state.select(Some(0));
+        app.nav.set_state.select(Some(0));
         app.backfill_channel_names();
         app
     }
@@ -336,11 +327,13 @@ impl App {
         self.detail.current_idx = current_idx;
 
         let select = current_idx.unwrap_or(0);
-        self.epg_state.select(if self.detail.programs.is_empty() {
-            None
-        } else {
-            Some(select)
-        });
+        self.nav
+            .epg_state
+            .select(if self.detail.programs.is_empty() {
+                None
+            } else {
+                Some(select)
+            });
         self.screen = Screen::Detail;
     }
 
@@ -353,7 +346,7 @@ impl App {
         let url = ch.url.clone();
         let name = ch.name.clone();
 
-        let epg_idx = self.epg_state.selected();
+        let epg_idx = self.nav.epg_state.selected();
         let now = chrono::Utc::now().timestamp();
 
         if let Some(idx) = epg_idx {
@@ -496,7 +489,7 @@ impl App {
     // ─── AI Playback ────────────────────────────────────────────────────
 
     pub fn ai_play_selected(&mut self) {
-        let idx = match self.ai_state.selected() {
+        let idx = match self.nav.ai_state.selected() {
             Some(i) if i < self.ai.results.len() => i,
             _ => return,
         };
@@ -542,9 +535,9 @@ impl App {
     }
 
     pub fn update_filter(&mut self) {
-        let q = self.search.to_lowercase();
-        let group = &self.selected_group;
-        self.filtered = self
+        let q = self.nav.search.to_lowercase();
+        let group = &self.nav.selected_group;
+        self.nav.filtered = self
             .data
             .channels
             .iter()
@@ -553,8 +546,8 @@ impl App {
             .filter(|(_, ch)| q.is_empty() || ch.name_lower.contains(&q))
             .map(|(i, _)| i)
             .collect();
-        if self.filtered.is_empty() && !q.is_empty() {
-            self.filtered = self
+        if self.nav.filtered.is_empty() && !q.is_empty() {
+            self.nav.filtered = self
                 .data
                 .channels
                 .iter()
@@ -563,7 +556,7 @@ impl App {
                 .map(|(i, _)| i)
                 .collect();
         }
-        self.ch_state.select(if self.filtered.is_empty() {
+        self.nav.ch_state.select(if self.nav.filtered.is_empty() {
             None
         } else {
             Some(0)
@@ -572,8 +565,8 @@ impl App {
     }
 
     pub fn update_radio_filter(&mut self) {
-        let genre = &self.selected_radio_genre;
-        self.filtered_radio = self
+        let genre = &self.nav.selected_radio_genre;
+        self.nav.filtered_radio = self
             .data
             .radio
             .iter()
@@ -581,11 +574,13 @@ impl App {
             .filter(|(_, r)| genre == "All" || r.genres.contains(genre))
             .map(|(i, _)| i)
             .collect();
-        self.r_state.select(if self.filtered_radio.is_empty() {
-            None
-        } else {
-            Some(0)
-        });
+        self.nav
+            .r_state
+            .select(if self.nav.filtered_radio.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
         self.needs_redraw = true;
     }
 
