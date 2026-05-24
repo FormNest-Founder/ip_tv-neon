@@ -167,9 +167,11 @@ const DEFAULT_PROMPT: &str = "\
 8. Ты ЭКСПЕРТ по кино и сериалам. Используй свои знания о рейтингах, актёрах, режиссёрах, жанрах, наградах.";
 
 /// Load system prompt from ~/.config/neon-iptv/ai_prompt.md (fallback to built-in default)
-pub fn load_system_prompt() -> String {
+pub async fn load_system_prompt() -> String {
     let path = crate::consts::get_config_dir().join("ai_prompt.md");
-    std::fs::read_to_string(&path).unwrap_or_else(|_| DEFAULT_PROMPT.to_string())
+    tokio::fs::read_to_string(&path)
+        .await
+        .unwrap_or_else(|_| DEFAULT_PROMPT.to_string())
 }
 
 // ─── Context Builder ─────────────────────────────────────────────────────────
@@ -230,7 +232,7 @@ pub async fn ai_chat(
     context: &str,
     provider: LlmProvider,
 ) -> AiChatResponse {
-    let prompt = load_system_prompt();
+    let prompt = load_system_prompt().await;
     let system_content = if context.is_empty() {
         prompt
     } else {

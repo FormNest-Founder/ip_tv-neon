@@ -815,10 +815,12 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
 
     // ── Track marquee: "Station │ Artist │ Track" ─────────────────────────
     // Build the composite marquee string from available metadata pieces.
+    let safe_artist = sanitize(&meta_artist);
+    let safe_track = sanitize(&meta_track);
     let marquee_text = build_marquee_text(
         &app.radio_station_title,
-        &meta_artist,
-        &meta_track,
+        &safe_artist,
+        &safe_track,
         &media_title,
     );
     let track_line = Line::from(vec![

@@ -87,7 +87,11 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
             .await
             .context("Failed to fetch playlist")?
     } else {
-        fs::read_to_string(&config.playlist_url).context("Failed to read local playlist")?
+        let path = config.playlist_url.clone();
+        tokio::task::spawn_blocking(move || fs::read_to_string(&path))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join: {e}"))?
+            .context("Failed to read local playlist")?
     };
 
     let mut channels: Vec<Channel> = Vec::new();

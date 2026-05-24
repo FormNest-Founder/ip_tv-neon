@@ -417,7 +417,12 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                 0 => app.screen = Screen::CatList,
                 1 => app.screen = Screen::RadioCatList,
                 2 => {
-                    app.local_files = scan_local_playlists(&app.config.local_dir);
+                    let local_dir = app.config.local_dir.clone();
+                    let files =
+                        tokio::task::spawn_blocking(move || scan_local_playlists(&local_dir))
+                            .await
+                            .unwrap_or_default();
+                    app.local_files = files;
                     app.d_state.select(Some(0));
                     app.screen = Screen::LocalList;
                 }
