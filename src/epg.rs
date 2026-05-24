@@ -345,6 +345,38 @@ pub fn save_data(data: AppData) -> Result<()> {
     Ok(())
 }
 
+pub fn load_data() -> AppData {
+    let path = get_data_bin_path();
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => return AppData::default(),
+    };
+
+    if bytes.len() < 4 {
+        main_log("[cache] file too short — invalidating");
+        let _ = std::fs::remove_file(&path);
+        return AppData::default();
+    }
+
+    let version = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+    if version != CACHE_SCHEMA_VERSION {
+        main_log(&format!(
+            "[cache] schema v{version} != expected v{CACHE_SCHEMA_VERSION} — invalidating"
+        ));
+        let _ = std::fs::remove_file(&path);
+        return AppData::default();
+    }
+
+    match bincode::deserialize::<CacheContainer>(&bytes) {
+        Ok(c) if c.version == CACHE_SCHEMA_VERSION => c.data,
+        _ => {
+            main_log("[cache] deserialize failed after version check — invalidating");
+            let _ = std::fs::remove_file(&path);
+            AppData::default()
+        }
+    }
+}
+
 // ─── Radio Now Playing ───────────────────────────────────────────────────────
 
 pub async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String> {

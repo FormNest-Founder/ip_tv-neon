@@ -1,9 +1,8 @@
 // ─── Imports ─────────────────────────────────────────────────────────────────
 
 use crate::ai::{AiSearchResult, ChatMsg};
-use crate::consts::*;
-use crate::epg::find_epg_id;
-use crate::models::{AppData, CacheContainer, Config, EpgProgram, Screen};
+use crate::epg::{find_epg_id, load_data};
+use crate::models::{AppData, Config, EpgProgram, Screen};
 use crate::mpv_ipc::{spawn_ipc_task, IpcHandle, RadioState, SharedRadioState};
 use crate::utils::main_log;
 use ratatui::widgets::ListState;
@@ -117,18 +116,7 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Self {
-        let path = get_data_bin_path();
-        let data = if let Ok(f) = File::open(&path) {
-            match bincode::deserialize_from::<_, CacheContainer>(f) {
-                Ok(c) if c.version == APP_VERSION => c.data,
-                _ => {
-                    let _ = std::fs::remove_file(path);
-                    AppData::default()
-                }
-            }
-        } else {
-            AppData::default()
-        };
+        let data = load_data();
 
         let mut app = Self {
             config,
@@ -158,15 +146,8 @@ impl App {
     }
 
     pub fn reload_data(&mut self) {
-        let path = get_data_bin_path();
-        if let Ok(f) = File::open(&path) {
-            if let Ok(c) = bincode::deserialize_from::<_, CacheContainer>(f) {
-                if c.version == APP_VERSION {
-                    self.data = c.data;
-                    self.backfill_channel_names();
-                }
-            }
-        }
+        self.data = load_data();
+        self.backfill_channel_names();
     }
 
     /// Заполнить channel_names из загруженного плейлиста для favorites/history

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+#[allow(dead_code)] // keep for diagnostics: app version displayed in --help / future use
 pub const APP_VERSION: u32 = 911;
 /// Cache schema version — bump when bincode struct layout changes.
 /// Policy: increment any time CacheContainer or AppData fields change.
