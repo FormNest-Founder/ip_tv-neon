@@ -58,8 +58,11 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                     radio.push(RadioStation {
                         id: id_str.clone(),
                         title: s["title"].as_str().unwrap_or("").into(),
-                        stream: s["stream_320"]
+                        // stream_128 is the real 128 kbps max; stream_320 label
+                        // is misleading — radio-record.ru serves only 96 kbps on it.
+                        stream: s["stream_128"]
                             .as_str()
+                            .or(s["stream_320"].as_str())
                             .or(s["stream_hls"].as_str())
                             .unwrap_or("")
                             .into(),

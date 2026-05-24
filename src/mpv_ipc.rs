@@ -13,7 +13,14 @@ use tokio::time::{sleep, timeout, Duration, Instant};
 #[derive(Debug, Clone, Default)]
 pub struct RadioState {
     pub media_title: String,
+    /// Raw icy-title string, usually "Artist - Track"
     pub icy_title: String,
+    /// Station name from icy-name metadata tag
+    pub icy_name: String,
+    /// Artist extracted from metadata (artist or icy-title prefix)
+    pub meta_artist: String,
+    /// Track title extracted from metadata (title or icy-title suffix)
+    pub meta_track: String,
     pub volume: f64,
     pub paused: bool,
     pub muted: bool,
@@ -179,13 +186,40 @@ fn handle_event(text: &str, state: &SharedRadioState) {
             }
         }
         "metadata" => {
-            let title = data
+            // Station name
+            if let Some(name) = data.get("icy-name").and_then(|v| v.as_str()) {
+                st.icy_name = name.to_string();
+            }
+
+            // Raw icy-title (usually "Artist - Track")
+            let raw_icy = data
                 .get("icy-title")
-                .or_else(|| data.get("title"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            st.icy_title = title;
+            st.icy_title = raw_icy.clone();
+
+            // Prefer explicit artist/title tags if present
+            let explicit_artist = data.get("artist").and_then(|v| v.as_str()).unwrap_or("");
+            let explicit_title = data
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if !explicit_artist.is_empty() || !explicit_title.is_empty() {
+                st.meta_artist = explicit_artist.to_string();
+                st.meta_track = explicit_title.to_string();
+            } else if !raw_icy.is_empty() {
+                // Parse "Artist - Track" from icy-title
+                if let Some((artist, track)) = raw_icy.split_once(" - ") {
+                    st.meta_artist = artist.trim().to_string();
+                    st.meta_track = track.trim().to_string();
+                } else {
+                    // Whole icy-title is the track, no artist known
+                    st.meta_artist.clear();
+                    st.meta_track = raw_icy;
+                }
+            }
         }
         "audio-bitrate" => {
             // mpv reports bitrate in bits/s as float
