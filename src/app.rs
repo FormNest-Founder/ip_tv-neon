@@ -87,6 +87,8 @@ pub struct NavState {
     pub selected_radio_genre: String,
     pub search: String,
     pub edit_buf: String,
+    #[expect(dead_code)]
+    pub quality_popup: Option<usize>,
 }
 
 // ─── App State ───────────────────────────────────────────────────────────────

@@ -55,6 +55,25 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                         }
                     }
                     let id_str = s["id"].as_i64().unwrap_or(0).to_string();
+
+                    let mut quality_urls = HashMap::new();
+                    quality_urls.insert(
+                        "64".to_string(),
+                        s["stream_64"].as_str().unwrap_or("").to_string(),
+                    );
+                    quality_urls.insert(
+                        "128".to_string(),
+                        s["stream_128"].as_str().unwrap_or("").to_string(),
+                    );
+                    quality_urls.insert(
+                        "320".to_string(),
+                        s["stream_320"].as_str().unwrap_or("").to_string(),
+                    );
+                    quality_urls.insert(
+                        "hls".to_string(),
+                        s["stream_hls"].as_str().unwrap_or("").to_string(),
+                    );
+
                     radio.push(RadioStation {
                         id: id_str.clone(),
                         title: s["title"].as_str().unwrap_or("").into(),
@@ -66,6 +85,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                             .or(s["stream_hls"].as_str())
                             .unwrap_or("")
                             .into(),
+                        quality_urls,
                         genres,
                         provider: "Record".into(),
                         track: tracks_map.get(&id_str).cloned(),

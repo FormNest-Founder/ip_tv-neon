@@ -143,6 +143,8 @@ pub struct RadioStation {
     pub id: String,
     pub title: String,
     pub stream: String,
+    #[serde(default)]
+    pub quality_urls: HashMap<String, String>,
     pub genres: Vec<String>,
     pub provider: String,
     pub track: Option<String>,
