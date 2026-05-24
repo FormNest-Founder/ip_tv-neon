@@ -11,7 +11,14 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::process::{Child, Command};
+
+// ─── VU Constants ────────────────────────────────────────────────────────────
+
+pub const VU_BARS: usize = 20;
+/// How long a peak indicator stays at max before falling (in ticks at 50ms)
+const PEAK_HOLD_TICKS: u32 = 10;
 
 // ─── App State ───────────────────────────────────────────────────────────────
 
@@ -42,6 +49,14 @@ pub struct App {
     pub radio_ipc: Option<IpcHandle>,
     pub radio_state: SharedRadioState,
     pub radio_station_title: String,
+    // VU-meter simulation state
+    pub vu_bars: [f32; VU_BARS],         // current smoothed bar heights 0..1
+    pub vu_peaks: [f32; VU_BARS],        // peak indicator positions 0..1
+    pub vu_peak_hold: [u32; VU_BARS],    // ticks remaining at current peak
+    pub radio_start: Option<Instant>,    // when radio started (drives oscillators)
+    // Marquee scroll state
+    pub marquee_offset: usize,
+    pub marquee_tick: u32,               // counts 50ms ticks; advance offset every 5 (=250ms)
     pub needs_redraw: bool,
     pub debug: bool,
     pub status_msg: Option<String>,
@@ -103,6 +118,12 @@ impl App {
             radio_ipc: None,
             radio_state: Arc::new(Mutex::new(RadioState::default())),
             radio_station_title: String::new(),
+            vu_bars: [0.0; VU_BARS],
+            vu_peaks: [0.0; VU_BARS],
+            vu_peak_hold: [0; VU_BARS],
+            radio_start: None,
+            marquee_offset: 0,
+            marquee_tick: 0,
             needs_redraw: true,
             debug: false,
             status_msg: None,
@@ -172,6 +193,78 @@ impl App {
         self.suspended = false;
         *self.radio_state.lock().unwrap() = RadioState::default();
         self.radio_station_title.clear();
+        self.radio_start = None;
+        self.vu_bars = [0.0; VU_BARS];
+        self.vu_peaks = [0.0; VU_BARS];
+        self.vu_peak_hold = [0; VU_BARS];
+        self.marquee_offset = 0;
+        self.marquee_tick = 0;
+    }
+
+    // ─── Radio VU + Marquee Tick (called every 50ms) ──────────────────────
+
+    /// Advance VU-meter simulation and marquee scroll by one 50ms tick.
+    /// Should only be called while radio_ipc.is_some().
+    pub fn tick_radio(&mut self) {
+        use rand::Rng;
+
+        let (paused, muted, volume) = {
+            let st = self.radio_state.lock().unwrap();
+            (st.paused, st.muted, st.volume)
+        };
+
+        let elapsed_s = self.radio_start
+            .map(|s| s.elapsed().as_secs_f32())
+            .unwrap_or(0.0);
+
+        // Volume/state scale factor for VU amplitude
+        let amp_scale = if paused || muted {
+            0.0f32
+        } else {
+            (volume as f32 / 100.0).clamp(0.0, 1.0)
+        };
+
+        // Frequency weights per bar: bass on the left, highs on the right
+        // Shape: raised cosine bump centred at each frequency band
+        let mut rng = rand::thread_rng();
+        for i in 0..VU_BARS {
+            let pos = i as f32 / (VU_BARS - 1) as f32; // 0..1
+
+            // Bass weight peaks at pos=0, mid at 0.4, high at 1.0
+            let w_bass = (1.0 - pos).powi(2);
+            let w_mid = 1.0 - (pos - 0.4).abs() * 2.5;
+            let w_mid = w_mid.clamp(0.0, 1.0);
+            let w_high = pos.powi(2);
+
+            let t = elapsed_s;
+            let bass = (t * 2.0 + i as f32 * 0.3).sin().abs();
+            let mid  = (t * 5.0 + i as f32 * 0.7).sin().abs() * 0.7;
+            let hi   = (t * 11.0 + i as f32 * 1.3).sin().abs() * 0.5;
+            let noise: f32 = rng.gen::<f32>() * 0.2;
+
+            let target = (bass * w_bass + mid * w_mid + hi * w_high + noise).min(1.0) * amp_scale;
+
+            // Low-pass: fast rise, slow decay
+            let alpha = if target > self.vu_bars[i] { 0.6 } else { 0.25 };
+            self.vu_bars[i] = self.vu_bars[i] * (1.0 - alpha) + target * alpha;
+
+            // Peak: hold then fall slowly
+            if self.vu_bars[i] >= self.vu_peaks[i] {
+                self.vu_peaks[i] = self.vu_bars[i];
+                self.vu_peak_hold[i] = PEAK_HOLD_TICKS;
+            } else if self.vu_peak_hold[i] > 0 {
+                self.vu_peak_hold[i] -= 1;
+            } else {
+                self.vu_peaks[i] = (self.vu_peaks[i] - 0.03).max(self.vu_bars[i]);
+            }
+        }
+
+        // Marquee: advance 1 char every 5 ticks (≈250ms)
+        self.marquee_tick += 1;
+        if self.marquee_tick >= 5 {
+            self.marquee_tick = 0;
+            self.marquee_offset += 1;
+        }
     }
 
     // ─── Detail / EPG Playback ────────────────────────────────────────────
@@ -302,6 +395,7 @@ impl App {
                     let handle = spawn_ipc_task(sock, state);
                     self.radio_ipc = Some(handle);
                     self.radio_station_title = title.to_string();
+                    self.radio_start = Some(Instant::now());
                 }
                 Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
             }

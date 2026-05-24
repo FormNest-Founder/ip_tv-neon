@@ -9,6 +9,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use tokio::time::interval;
 
 // ─── Modules ─────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,10 @@ use models::{Config, Screen, SETTINGS_COUNT};
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MENU_ITEMS: usize = 10;
+/// Normal UI redraw rate (keyboard-driven)
+const TICK_RATE: Duration = Duration::from_millis(1000);
+/// Radio animation tick: 20 FPS — drives VU meters and marquee
+const RADIO_TICK: Duration = Duration::from_millis(50);
 
 // ─── Entry Point & Event Loop ────────────────────────────────────────────────
 
@@ -51,7 +56,6 @@ async fn main() -> Result<()> {
         _ => {}
     }
 
-    // Fix 3: panic hook to restore terminal on panic
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
@@ -70,12 +74,25 @@ async fn main() -> Result<()> {
     let mut radio_task: Option<tokio::task::JoinHandle<HashMap<String, String>>> = None;
     let mut ai_task: Option<tokio::task::JoinHandle<ai::AiChatResponse>> = None;
     let mut update_task: Option<tokio::task::JoinHandle<Result<()>>> = None;
-    let tick_rate = Duration::from_millis(1000);
+
+    // 50ms interval for radio animation — only polled when radio IPC is active
+    let mut radio_interval = interval(RADIO_TICK);
+    radio_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        // (niri suspend/restore removed — TUI stays visible while mpv plays)
+        // ── Poll radio animation tick (20 FPS, only active during radio playback) ─
+        if app.radio_ipc.is_some() {
+            tokio::select! {
+                biased;
+                _ = radio_interval.tick() => {
+                    app.tick_radio();
+                    app.needs_redraw = true;
+                }
+                _ = tokio::time::sleep(Duration::ZERO) => {}
+            }
+        }
 
-        // Check if background MPV has exited
+        // ── Check if background MPV has exited ────────────────────────────────
         if let Some(ref mut child) = app.mpv_handle {
             if let Ok(Some(_)) = child.try_wait() {
                 app.mpv_handle = None;
@@ -86,7 +103,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Async radio track fetch (non-blocking)
+        // ── Async radio track fetch (non-blocking) ────────────────────────────
         if matches!(app.screen, Screen::RadioCatList | Screen::RadioList) && radio_tracks_dirty && radio_task.is_none() {
             radio_tracks_dirty = false;
             let client = http_client.clone();
@@ -111,16 +128,14 @@ async fn main() -> Result<()> {
             radio_tracks_dirty = true;
         }
 
-        // Check if AI chat task finished
+        // ── AI task completion ────────────────────────────────────────────────
         if ai_task.as_ref().is_some_and(|t| t.is_finished()) {
             if let Some(task) = ai_task.take() {
                 if let Ok(response) = task.await {
-                    // Add assistant message to chat history
                     app.ai_chat_history.push(ai::ChatMsg {
                         is_user: false,
                         text: response.text,
                     });
-                    // If keywords returned — search EPG
                     if let Some(ref kw) = response.keywords {
                         let now = chrono::Utc::now().timestamp();
                         app.ai_results = ai::search_epg(&app.data, kw, now);
@@ -136,7 +151,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Launch data update as background task (non-blocking)
+        // ── Data update task ──────────────────────────────────────────────────
         if matches!(app.screen, Screen::Updating) && update_task.is_none() {
             let config = app.config.clone();
             let client = http_client.clone();
@@ -144,7 +159,6 @@ async fn main() -> Result<()> {
                 update_data(&config, &client).await
             }));
         }
-        // Check if update task finished
         if update_task.as_ref().is_some_and(|t| t.is_finished()) {
             if let Some(task) = update_task.take() {
                 match task.await {
@@ -167,25 +181,27 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Force redraw while radio IPC is active so track/volume update live
-        if app.radio_ipc.is_some() {
-            app.needs_redraw = true;
-        }
-
-        if app.needs_redraw || last_tick.elapsed() >= tick_rate {
+        // ── Draw ──────────────────────────────────────────────────────────────
+        if app.needs_redraw || last_tick.elapsed() >= TICK_RATE {
             terminal.draw(|f| ui::ui(f, &mut app))?;
             app.needs_redraw = false;
             last_tick = Instant::now();
         }
 
-        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout)? {
+        // ── Keyboard events ───────────────────────────────────────────────────
+        // Use a short poll when radio is active (so animation keeps running)
+        let poll_timeout = if app.radio_ipc.is_some() {
+            Duration::from_millis(16) // ~60fps poll, animation driven by radio_interval above
+        } else {
+            TICK_RATE.saturating_sub(last_tick.elapsed())
+        };
+
+        if event::poll(poll_timeout)? {
             if let Event::Key(key) = event::read()? {
                 // AI chat needs http_client and ai_task — handle inline
                 let handled = match app.screen {
                     Screen::AiChat => {
                         if app.ai_focus_results {
-                            // Focus on results list — typing switches to chat
                             match key.code {
                                 KeyCode::Up => nav_up(&mut app.ai_state, app.ai_results.len()),
                                 KeyCode::Down => nav_down(&mut app.ai_state, app.ai_results.len()),
@@ -207,7 +223,6 @@ async fn main() -> Result<()> {
                                 _ => {}
                             }
                         } else {
-                            // Focus on chat input
                             match key.code {
                                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => { app.ai_query.push(c); }
                                 KeyCode::Backspace => { app.ai_query.pop(); }
