@@ -380,9 +380,10 @@ impl App {
 
         if self.debug {
             c.arg("--log-file=/tmp/neon_mpv.log");
+            let safe_url = url.split('?').next().unwrap_or("(url)");
             main_log(&format!(
                 "MPV launch: url={} radio={} title={}",
-                url, radio, display_title
+                safe_url, radio, display_title
             ));
         }
 

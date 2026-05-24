@@ -364,12 +364,9 @@ async fn chat_gemini(
         },
     };
 
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-        api_key
-    );
     let resp = client
-        .post(&url)
+        .post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent")
+        .header("X-Goog-Api-Key", &api_key)
         .timeout(std::time::Duration::from_secs(30))
         .json(&body)
         .send()
