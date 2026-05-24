@@ -201,10 +201,7 @@ fn handle_event(text: &str, state: &SharedRadioState) {
 
             // Prefer explicit artist/title tags if present
             let explicit_artist = data.get("artist").and_then(|v| v.as_str()).unwrap_or("");
-            let explicit_title = data
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let explicit_title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
 
             if !explicit_artist.is_empty() || !explicit_title.is_empty() {
                 st.meta_artist = explicit_artist.to_string();
