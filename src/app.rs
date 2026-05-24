@@ -44,6 +44,16 @@ impl Default for RadioVisuals {
     }
 }
 
+// ─── Detail Screen Sub-State ────────────────────────────────────────────────
+
+#[derive(Default)]
+pub struct DetailState {
+    pub channel: Option<usize>,
+    pub programs: Vec<EpgProgram>,
+    pub current_idx: Option<usize>,
+    pub return_screen: Option<Screen>,
+}
+
 // ─── App State ───────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -77,10 +87,7 @@ pub struct App {
     pub needs_redraw: bool,
     pub debug: bool,
     pub status_msg: Option<String>,
-    pub detail_channel: Option<usize>,
-    pub detail_programs: Vec<EpgProgram>,
-    pub detail_current_idx: Option<usize>,
-    pub detail_return_screen: Option<Screen>,
+    pub detail: DetailState,
     // AI Chat
     pub ai_query: String,
     pub ai_results: Vec<AiSearchResult>,
@@ -139,10 +146,7 @@ impl App {
             needs_redraw: true,
             debug: false,
             status_msg: None,
-            detail_channel: None,
-            detail_programs: Vec::new(),
-            detail_current_idx: None,
-            detail_return_screen: None,
+            detail: DetailState::default(),
             ai_query: String::new(),
             ai_results: Vec::new(),
             ai_state: ListState::default(),
@@ -305,9 +309,9 @@ impl App {
         if channel_idx >= self.data.channels.len() {
             return;
         }
-        self.detail_return_screen = Some(self.screen);
+        self.detail.return_screen = Some(self.screen);
         let ch = &self.data.channels[channel_idx];
-        self.detail_channel = Some(channel_idx);
+        self.detail.channel = Some(channel_idx);
 
         let now = chrono::Utc::now().timestamp();
         let epg_id = find_epg_id(ch, &self.data);
@@ -327,11 +331,11 @@ impl App {
         };
 
         let current_idx = programs.iter().position(|p| now >= p.start && now < p.stop);
-        self.detail_programs = programs;
-        self.detail_current_idx = current_idx;
+        self.detail.programs = programs;
+        self.detail.current_idx = current_idx;
 
         let select = current_idx.unwrap_or(0);
-        self.epg_state.select(if self.detail_programs.is_empty() {
+        self.epg_state.select(if self.detail.programs.is_empty() {
             None
         } else {
             Some(select)
@@ -340,7 +344,7 @@ impl App {
     }
 
     pub fn detail_play_selected(&mut self) {
-        let ch_idx = match self.detail_channel {
+        let ch_idx = match self.detail.channel {
             Some(i) if i < self.data.channels.len() => i,
             _ => return,
         };
@@ -352,10 +356,10 @@ impl App {
         let now = chrono::Utc::now().timestamp();
 
         if let Some(idx) = epg_idx {
-            if idx < self.detail_programs.len() {
-                let prog_title = self.detail_programs[idx].title.clone();
-                let prog_start = self.detail_programs[idx].start;
-                let prog_stop = self.detail_programs[idx].stop;
+            if idx < self.detail.programs.len() {
+                let prog_title = self.detail.programs[idx].title.clone();
+                let prog_start = self.detail.programs[idx].start;
+                let prog_stop = self.detail.programs[idx].stop;
                 let is_current = now >= prog_start && now < prog_stop;
                 let is_future = prog_start > now;
 
@@ -377,7 +381,7 @@ impl App {
     }
 
     pub fn detail_play_live(&mut self) {
-        let ch_idx = match self.detail_channel {
+        let ch_idx = match self.detail.channel {
             Some(i) if i < self.data.channels.len() => i,
             _ => return,
         };

@@ -995,7 +995,7 @@ fn lerp_color(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> Color {
 // ─── Detail Screen ───────────────────────────────────────────────────────────
 
 fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
-    let ch_idx = match app.detail_channel {
+    let ch_idx = match app.detail.channel {
         Some(i) => i,
         None => return,
     };
@@ -1037,7 +1037,7 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     );
     f.render_widget(header, chunks[0]);
 
-    if app.detail_programs.is_empty() {
+    if app.detail.programs.is_empty() {
         f.render_widget(
             Paragraph::new("  No EPG data available")
                 .fg(Color::DarkGray)
@@ -1046,7 +1046,8 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
         );
     } else {
         let items: Vec<ListItem> = app
-            .detail_programs
+            .detail
+            .programs
             .iter()
             .map(|p| {
                 let is_current = now >= p.start && now < p.stop;
@@ -1107,8 +1108,8 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let desc_text = if let Some(idx) = app.epg_state.selected() {
-        if idx < app.detail_programs.len() {
-            let p = &app.detail_programs[idx];
+        if idx < app.detail.programs.len() {
+            let p = &app.detail.programs[idx];
             if p.desc.is_empty() {
                 p.title.clone()
             } else {

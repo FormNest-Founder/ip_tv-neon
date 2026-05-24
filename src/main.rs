@@ -626,12 +626,12 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         },
 
         Screen::Detail => match key.code {
-            KeyCode::Up => nav_up(&mut app.epg_state, app.detail_programs.len()),
-            KeyCode::Down => nav_down(&mut app.epg_state, app.detail_programs.len()),
+            KeyCode::Up => nav_up(&mut app.epg_state, app.detail.programs.len()),
+            KeyCode::Down => nav_down(&mut app.epg_state, app.detail.programs.len()),
             KeyCode::Enter => app.detail_play_selected(),
             KeyCode::Char('l') => app.detail_play_live(),
             KeyCode::Char('f') => {
-                if let Some(ch_idx) = app.detail_channel.filter(|&i| i < app.data.channels.len()) {
+                if let Some(ch_idx) = app.detail.channel.filter(|&i| i < app.data.channels.len()) {
                     let ch = &app.data.channels[ch_idx];
                     let url = ch.url.clone();
                     let name = ch.name.clone();
@@ -643,7 +643,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                 }
             }
             KeyCode::Esc => {
-                app.screen = app.detail_return_screen.take().unwrap_or(Screen::ChanList);
+                app.screen = app.detail.return_screen.take().unwrap_or(Screen::ChanList);
             }
             _ => {}
         },
