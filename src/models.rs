@@ -60,8 +60,26 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        fs::create_dir_all(get_config_dir())?;
-        fs::write(get_config_json_path(), serde_json::to_string_pretty(self)?)?;
+        use std::io::Write;
+        let dir = get_config_dir();
+        fs::create_dir_all(&dir)?;
+        let path = get_config_json_path();
+        let tmp = path.with_extension("tmp");
+        {
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp)?;
+            f.write_all(serde_json::to_string_pretty(self)?.as_bytes())?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp, &path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        }
         Ok(())
     }
 

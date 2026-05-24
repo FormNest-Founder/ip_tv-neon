@@ -394,7 +394,7 @@ impl App {
                 .arg("--idle=yes")
                 .arg("--keep-open=yes")
                 .arg(format!("--input-ipc-server={}", sock));
-            c.arg(url);
+            c.arg("--").arg(url);
             c.stdout(Stdio::null()).stdin(Stdio::null());
             // Redirect stderr to log so failures are visible (not silent)
             match File::create("/tmp/neon_mpv_stderr.log") {
@@ -437,7 +437,7 @@ impl App {
                 c.arg("--no-keepaspect-window")
                     .arg(format!("--geometry={}", self.config.video_geometry));
             }
-            c.arg(url);
+            c.arg("--").arg(url);
             c.stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .stdin(Stdio::null());
