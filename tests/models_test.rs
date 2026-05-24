@@ -39,3 +39,20 @@ fn config_save_load_roundtrip() {
     assert_eq!(original.video_geometry, restored.video_geometry);
     assert_eq!(original.llm_provider, restored.llm_provider);
 }
+
+#[test]
+fn config_save_uses_atomic_rename() {
+    let source = include_str!("../src/models.rs");
+    assert!(
+        source.contains(r#"with_extension("tmp")"#),
+        "Config::save must use temp file"
+    );
+    assert!(
+        source.contains("fs::rename"),
+        "Config::save must use atomic rename"
+    );
+    assert!(
+        source.contains("sync_all"),
+        "Config::save must fsync before rename"
+    );
+}
