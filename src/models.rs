@@ -26,8 +26,12 @@ pub struct Config {
     pub llm_provider: String,
 }
 
-fn default_fullscreen() -> bool { true }
-fn default_geometry() -> String { "1280x720".into() }
+fn default_fullscreen() -> bool {
+    true
+}
+fn default_geometry() -> String {
+    "1280x720".into()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -89,7 +93,10 @@ impl Config {
 
     /// Получить имя канала: сначала из кеша, потом fallback на URL
     pub fn channel_name<'a>(&'a self, url: &'a str) -> &'a str {
-        self.channel_names.get(url).map(|s| s.as_str()).unwrap_or(url)
+        self.channel_names
+            .get(url)
+            .map(|s| s.as_str())
+            .unwrap_or(url)
     }
 }
 

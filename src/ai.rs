@@ -169,8 +169,7 @@ const DEFAULT_PROMPT: &str = "\
 /// Load system prompt from ~/.config/neon-iptv/ai_prompt.md (fallback to built-in default)
 pub fn load_system_prompt() -> String {
     let path = crate::consts::get_config_dir().join("ai_prompt.md");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|_| DEFAULT_PROMPT.to_string())
+    std::fs::read_to_string(&path).unwrap_or_else(|_| DEFAULT_PROMPT.to_string())
 }
 
 // ─── Context Builder ─────────────────────────────────────────────────────────
@@ -191,7 +190,9 @@ pub fn build_context(data: &AppData, config_history: &[String], channels: &[Chan
                     ctx.push_str(&ch.name);
                     ctx.push('\n');
                     count += 1;
-                    if count >= 15 { break; }
+                    if count >= 15 {
+                        break;
+                    }
                 }
             }
         }
@@ -203,11 +204,17 @@ pub fn build_context(data: &AppData, config_history: &[String], channels: &[Chan
     let mut epg_count = 0;
     for ch in channels {
         if let Some(prog) = get_current_epg(ch, data, now) {
-            let archive = if ch.catchup_days > 0 { " [archive]" } else { "" };
+            let archive = if ch.catchup_days > 0 {
+                " [archive]"
+            } else {
+                ""
+            };
             ctx.push_str(&format!("{}: {}{}\n", ch.name, prog.title, archive));
             epg_count += 1;
         }
-        if epg_count >= 200 { break; }
+        if epg_count >= 200 {
+            break;
+        }
     }
 
     ctx
@@ -237,19 +244,36 @@ pub async fn ai_chat(
 
     let full_text = match full_text {
         Ok(t) => t,
-        Err(e) => return AiChatResponse { text: e, keywords: None },
+        Err(e) => {
+            return AiChatResponse {
+                text: e,
+                keywords: None,
+            }
+        }
     };
 
     let (display_text, keywords) = extract_keywords(&full_text);
-    AiChatResponse { text: display_text, keywords }
+    AiChatResponse {
+        text: display_text,
+        keywords,
+    }
 }
 
-async fn chat_deepseek(client: &Client, history: &[ChatMsg], user_msg: &str, system: &str) -> Result<String, String> {
+async fn chat_deepseek(
+    client: &Client,
+    history: &[ChatMsg],
+    user_msg: &str,
+    system: &str,
+) -> Result<String, String> {
     let api_key = std::env::var("DEEPSEEK_API_KEY")
-        .ok().filter(|k| !k.is_empty())
+        .ok()
+        .filter(|k| !k.is_empty())
         .ok_or("DEEPSEEK_API_KEY not set in /etc/environment")?;
 
-    let mut messages = vec![ApiMessage { role: "system".into(), content: system.into() }];
+    let mut messages = vec![ApiMessage {
+        role: "system".into(),
+        content: system.into(),
+    }];
     let skip = history.len().saturating_sub(10);
     for msg in &history[skip..] {
         messages.push(ApiMessage {
@@ -257,30 +281,56 @@ async fn chat_deepseek(client: &Client, history: &[ChatMsg], user_msg: &str, sys
             content: msg.text.clone(),
         });
     }
-    messages.push(ApiMessage { role: "user".into(), content: user_msg.into() });
+    messages.push(ApiMessage {
+        role: "user".into(),
+        content: user_msg.into(),
+    });
 
-    let body = ApiRequest { model: "deepseek-chat", messages, temperature: 0.7 };
-    let resp = client.post("https://api.deepseek.com/v1/chat/completions")
+    let body = ApiRequest {
+        model: "deepseek-chat",
+        messages,
+        temperature: 0.7,
+    };
+    let resp = client
+        .post("https://api.deepseek.com/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
         .timeout(std::time::Duration::from_secs(30))
-        .json(&body).send().await
+        .json(&body)
+        .send()
+        .await
         .map_err(|e| format!("Network error: {}", e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, &body[..body.len().min(200)]));
+        return Err(format!(
+            "API error {}: {}",
+            status,
+            &body[..body.len().min(200)]
+        ));
     }
 
-    let parsed: ApiResponse = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
-    Ok(parsed.choices.first()
-        .and_then(|c| c.message.content.as_ref()).cloned()
+    let parsed: ApiResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+    Ok(parsed
+        .choices
+        .first()
+        .and_then(|c| c.message.content.as_ref())
+        .cloned()
         .unwrap_or_else(|| "No response".into()))
 }
 
-async fn chat_gemini(client: &Client, history: &[ChatMsg], user_msg: &str, system: &str) -> Result<String, String> {
+async fn chat_gemini(
+    client: &Client,
+    history: &[ChatMsg],
+    user_msg: &str,
+    system: &str,
+) -> Result<String, String> {
     let api_key = std::env::var("GEMINI_API_KEY")
-        .ok().filter(|k| !k.is_empty())
+        .ok()
+        .filter(|k| !k.is_empty())
         .ok_or("GEMINI_API_KEY not set in /etc/environment")?;
 
     let mut contents = Vec::new();
@@ -288,45 +338,67 @@ async fn chat_gemini(client: &Client, history: &[ChatMsg], user_msg: &str, syste
     for msg in &history[skip..] {
         contents.push(GeminiContent {
             role: if msg.is_user { "user" } else { "model" }.into(),
-            parts: vec![GeminiPart { text: msg.text.clone() }],
+            parts: vec![GeminiPart {
+                text: msg.text.clone(),
+            }],
         });
     }
     contents.push(GeminiContent {
         role: "user".into(),
-        parts: vec![GeminiPart { text: user_msg.into() }],
+        parts: vec![GeminiPart {
+            text: user_msg.into(),
+        }],
     });
 
     let body = GeminiRequest {
         contents,
         system_instruction: GeminiContent {
             role: "user".into(),
-            parts: vec![GeminiPart { text: system.into() }],
+            parts: vec![GeminiPart {
+                text: system.into(),
+            }],
         },
-        generation_config: GeminiGenConfig { temperature: 0.7, max_output_tokens: 2048 },
+        generation_config: GeminiGenConfig {
+            temperature: 0.7,
+            max_output_tokens: 2048,
+        },
     };
 
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
         api_key
     );
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .timeout(std::time::Duration::from_secs(30))
-        .json(&body).send().await
+        .json(&body)
+        .send()
+        .await
         .map_err(|e| format!("Network error: {}", e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Gemini API error {}: {}", status, &body[..body.len().min(200)]));
+        return Err(format!(
+            "Gemini API error {}: {}",
+            status,
+            &body[..body.len().min(200)]
+        ));
     }
 
-    let parsed: GeminiResponse = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
-    Ok(parsed.candidates.as_ref()
+    let parsed: GeminiResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+    Ok(parsed
+        .candidates
+        .as_ref()
         .and_then(|c| c.first())
         .and_then(|c| c.content.as_ref())
         .and_then(|c| c.parts.as_ref())
         .and_then(|p| p.first())
-        .and_then(|p| p.text.as_ref()).cloned()
+        .and_then(|p| p.text.as_ref())
+        .cloned()
         .unwrap_or_else(|| "No response".into()))
 }
 
@@ -339,7 +411,10 @@ fn extract_keywords(text: &str) -> (String, Option<Vec<String>>) {
 
     for line in text.lines() {
         let trimmed = line.trim();
-        if let Some(kw_str) = trimmed.strip_prefix("KEYWORDS:").or_else(|| trimmed.strip_prefix("keywords:")) {
+        if let Some(kw_str) = trimmed
+            .strip_prefix("KEYWORDS:")
+            .or_else(|| trimmed.strip_prefix("keywords:"))
+        {
             let kw: Vec<String> = kw_str
                 .split(',')
                 .map(|s| s.trim().to_lowercase())
@@ -363,11 +438,42 @@ fn extract_keywords(text: &str) -> (String, Option<Vec<String>>) {
 }
 
 const STOP_WORDS: &[&str] = &[
-    "фильм", "фильмы", "сериал", "сериалы", "кино", "передача", "канал",
-    "список", "рейтинг", "лучший", "лучшие", "новый", "новые", "главное",
-    "выпуск", "программа", "эфир", "серия", "сезон", "смотреть", "онлайн",
-    "movie", "film", "show", "series", "best", "new", "episode", "channel",
-    "watch", "online", "top", "rating", "про", "the", "and",
+    "фильм",
+    "фильмы",
+    "сериал",
+    "сериалы",
+    "кино",
+    "передача",
+    "канал",
+    "список",
+    "рейтинг",
+    "лучший",
+    "лучшие",
+    "новый",
+    "новые",
+    "главное",
+    "выпуск",
+    "программа",
+    "эфир",
+    "серия",
+    "сезон",
+    "смотреть",
+    "онлайн",
+    "movie",
+    "film",
+    "show",
+    "series",
+    "best",
+    "new",
+    "episode",
+    "channel",
+    "watch",
+    "online",
+    "top",
+    "rating",
+    "про",
+    "the",
+    "and",
 ];
 
 // ─── EPG Search ──────────────────────────────────────────────────────────────
@@ -397,7 +503,9 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
                         .count() as u32;
                     let desc_hits: u32 = kw_lower
                         .iter()
-                        .filter(|kw| !title_lower.contains(kw.as_str()) && desc_lower.contains(kw.as_str()))
+                        .filter(|kw| {
+                            !title_lower.contains(kw.as_str()) && desc_lower.contains(kw.as_str())
+                        })
                         .count() as u32;
                     let score = title_hits * 2 + desc_hits;
 
@@ -442,7 +550,8 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
 
     // Dedup first: sort by dedup key, remove duplicates, then sort by display order
     results.sort_by(|a, b| {
-        a.channel_idx.cmp(&b.channel_idx)
+        a.channel_idx
+            .cmp(&b.channel_idx)
             .then(a.program.title.cmp(&b.program.title))
             .then(a.program.start.cmp(&b.program.start))
     });

@@ -49,7 +49,10 @@ impl IpcHandle {
 
     pub fn set_mute(&self, muted: bool) {
         let val = if muted { "yes" } else { "no" };
-        self.send_cmd(format!(r#"{{"command":["set_property","mute","{}"],"request_id":1}}"#, val));
+        self.send_cmd(format!(
+            r#"{{"command":["set_property","mute","{}"],"request_id":1}}"#,
+            val
+        ));
     }
 
     pub fn quit(&self) {
@@ -176,7 +179,8 @@ fn handle_event(text: &str, state: &SharedRadioState) {
             }
         }
         "metadata" => {
-            let title = data.get("icy-title")
+            let title = data
+                .get("icy-title")
                 .or_else(|| data.get("title"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")

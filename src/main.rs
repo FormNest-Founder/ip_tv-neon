@@ -65,7 +65,12 @@ async fn main() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, event::EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        event::EnableBracketedPaste
+    )?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(config);
     app.debug = debug;
@@ -104,12 +109,13 @@ async fn main() -> Result<()> {
         }
 
         // ── Async radio track fetch (non-blocking) ────────────────────────────
-        if matches!(app.screen, Screen::RadioCatList | Screen::RadioList) && radio_tracks_dirty && radio_task.is_none() {
+        if matches!(app.screen, Screen::RadioCatList | Screen::RadioList)
+            && radio_tracks_dirty
+            && radio_task.is_none()
+        {
             radio_tracks_dirty = false;
             let client = http_client.clone();
-            radio_task = Some(tokio::spawn(async move {
-                fetch_radio_now(&client).await
-            }));
+            radio_task = Some(tokio::spawn(async move { fetch_radio_now(&client).await }));
         }
         let radio_done = radio_task.as_ref().is_some_and(|t| t.is_finished());
         if radio_done {
@@ -139,7 +145,11 @@ async fn main() -> Result<()> {
                     if let Some(ref kw) = response.keywords {
                         let now = chrono::Utc::now().timestamp();
                         app.ai_results = ai::search_epg(&app.data, kw, now);
-                        app.ai_state.select(if app.ai_results.is_empty() { None } else { Some(0) });
+                        app.ai_state.select(if app.ai_results.is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
                         if !app.ai_results.is_empty() {
                             app.ai_focus_results = true;
                         }
@@ -155,9 +165,9 @@ async fn main() -> Result<()> {
         if matches!(app.screen, Screen::Updating) && update_task.is_none() {
             let config = app.config.clone();
             let client = http_client.clone();
-            update_task = Some(tokio::spawn(async move {
-                update_data(&config, &client).await
-            }));
+            update_task = Some(tokio::spawn(
+                async move { update_data(&config, &client).await },
+            ));
         }
         if update_task.as_ref().is_some_and(|t| t.is_finished()) {
             if let Some(task) = update_task.take() {
@@ -167,7 +177,8 @@ async fn main() -> Result<()> {
                         let ch = app.data.channels.len();
                         let rd = app.data.radio.len();
                         let epg = app.data.epg.len();
-                        app.status_msg = Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
+                        app.status_msg =
+                            Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
                     }
                     Ok(Err(e)) => {
                         app.status_msg = Some(format!("Update failed: {}", e));
@@ -213,43 +224,69 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                 }
-                                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char(c)
+                                    if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     app.ai_focus_results = false;
                                     app.ai_query.push(c);
                                 }
-                                KeyCode::Backspace => { app.ai_focus_results = false; }
-                                KeyCode::Tab => { app.ai_focus_results = false; }
-                                KeyCode::Esc => { app.ai_loading = false; app.screen = Screen::MainMenu; }
+                                KeyCode::Backspace => {
+                                    app.ai_focus_results = false;
+                                }
+                                KeyCode::Tab => {
+                                    app.ai_focus_results = false;
+                                }
+                                KeyCode::Esc => {
+                                    app.ai_loading = false;
+                                    app.screen = Screen::MainMenu;
+                                }
                                 _ => {}
                             }
                         } else {
                             match key.code {
-                                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => { app.ai_query.push(c); }
-                                KeyCode::Backspace => { app.ai_query.pop(); }
-                                KeyCode::Enter => {
-                                    if !app.ai_query.is_empty() && !app.ai_loading {
-                                        let msg = app.ai_query.drain(..).collect::<String>();
-                                        app.ai_chat_history.push(ai::ChatMsg {
-                                            is_user: true,
-                                            text: msg.clone(),
-                                        });
-                                        app.ai_loading = true;
-                                        app.ai_chat_scroll = 0;
-                                        let client = http_client.clone();
-                                        let history = app.ai_chat_history.clone();
-                                        let context = ai::build_context(&app.data, &app.config.history, &app.data.channels);
-                                        let provider = ai::LlmProvider::from_str(&app.config.llm_provider);
-                                        ai_task = Some(tokio::spawn(async move {
-                                            ai::ai_chat(&client, &history[..history.len()-1], &msg, &context, provider).await
-                                        }));
-                                    }
+                                KeyCode::Char(c)
+                                    if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    app.ai_query.push(c);
                                 }
-                                KeyCode::Tab => {
-                                    if !app.ai_results.is_empty() {
-                                        app.ai_focus_results = true;
-                                    }
+                                KeyCode::Backspace => {
+                                    app.ai_query.pop();
                                 }
-                                KeyCode::Esc => { app.ai_loading = false; app.screen = Screen::MainMenu; }
+                                KeyCode::Enter if !app.ai_query.is_empty() && !app.ai_loading => {
+                                    let msg = app.ai_query.drain(..).collect::<String>();
+                                    app.ai_chat_history.push(ai::ChatMsg {
+                                        is_user: true,
+                                        text: msg.clone(),
+                                    });
+                                    app.ai_loading = true;
+                                    app.ai_chat_scroll = 0;
+                                    let client = http_client.clone();
+                                    let history = app.ai_chat_history.clone();
+                                    let context = ai::build_context(
+                                        &app.data,
+                                        &app.config.history,
+                                        &app.data.channels,
+                                    );
+                                    let provider =
+                                        ai::LlmProvider::from_str(&app.config.llm_provider);
+                                    ai_task = Some(tokio::spawn(async move {
+                                        ai::ai_chat(
+                                            &client,
+                                            &history[..history.len() - 1],
+                                            &msg,
+                                            &context,
+                                            provider,
+                                        )
+                                        .await
+                                    }));
+                                }
+                                KeyCode::Tab if !app.ai_results.is_empty() => {
+                                    app.ai_focus_results = true;
+                                }
+                                KeyCode::Esc => {
+                                    app.ai_loading = false;
+                                    app.screen = Screen::MainMenu;
+                                }
                                 _ => {}
                             }
                         }
@@ -269,20 +306,29 @@ async fn main() -> Result<()> {
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, event::DisableBracketedPaste)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        event::DisableBracketedPaste
+    )?;
     Ok(())
 }
 
 // ─── Navigation Helpers ──────────────────────────────────────────────────────
 
 fn nav_up(state: &mut ListState, len: usize) {
-    if len == 0 { return; }
+    if len == 0 {
+        return;
+    }
     let i = state.selected().unwrap_or(0);
     state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
 }
 
 fn nav_down(state: &mut ListState, len: usize) {
-    if len == 0 { return; }
+    if len == 0 {
+        return;
+    }
     let i = state.selected().unwrap_or(0);
     state.select(Some(if i >= len - 1 { 0 } else { i + 1 }));
 }
@@ -315,19 +361,23 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                 return;
             }
             KeyCode::Char(' ') => {
-                if let Some(ref ipc) = app.radio_ipc { ipc.toggle_pause(); }
+                if let Some(ref ipc) = app.radio_ipc {
+                    ipc.toggle_pause();
+                }
                 return;
             }
             KeyCode::Char('m') => {
                 let muted = app.radio_state.lock().unwrap().muted;
-                if let Some(ref ipc) = app.radio_ipc { ipc.set_mute(!muted); }
+                if let Some(ref ipc) = app.radio_ipc {
+                    ipc.set_mute(!muted);
+                }
                 return;
             }
             KeyCode::Esc => {
                 app.stop_all();
                 return;
             }
-            _ => {}  // All other keys (including ↑↓ Enter) fall through to screen handlers
+            _ => {} // All other keys (including ↑↓ Enter) fall through to screen handlers
         }
     }
 
@@ -341,8 +391,14 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
 
     match app.screen {
         Screen::MainMenu => match key.code {
-            KeyCode::Up => { app.status_msg = None; nav_up(&mut app.m_state, MENU_ITEMS); }
-            KeyCode::Down => { app.status_msg = None; nav_down(&mut app.m_state, MENU_ITEMS); }
+            KeyCode::Up => {
+                app.status_msg = None;
+                nav_up(&mut app.m_state, MENU_ITEMS);
+            }
+            KeyCode::Down => {
+                app.status_msg = None;
+                nav_down(&mut app.m_state, MENU_ITEMS);
+            }
             KeyCode::Enter => match app.m_state.selected().unwrap_or(0) {
                 0 => app.screen = Screen::CatList,
                 1 => app.screen = Screen::RadioCatList,
@@ -423,9 +479,18 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     }
                 }
             }
-            KeyCode::Char(c) => { app.search.push(c); app.update_filter(); }
-            KeyCode::Backspace => { app.search.pop(); app.update_filter(); }
-            KeyCode::Esc => { app.search.clear(); app.screen = Screen::CatList; }
+            KeyCode::Char(c) => {
+                app.search.push(c);
+                app.update_filter();
+            }
+            KeyCode::Backspace => {
+                app.search.pop();
+                app.update_filter();
+            }
+            KeyCode::Esc => {
+                app.search.clear();
+                app.screen = Screen::CatList;
+            }
             _ => {}
         },
 
@@ -453,7 +518,11 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     if idx < app.filtered_radio.len() {
                         let (url, title, track) = {
                             let st = &app.data.radio[app.filtered_radio[idx]];
-                            (st.stream.clone(), st.title.clone(), st.track.clone().unwrap_or_default())
+                            (
+                                st.stream.clone(),
+                                st.title.clone(),
+                                st.track.clone().unwrap_or_default(),
+                            )
                         };
                         app.run_mpv(&url, &title, &track, true);
                     }
@@ -471,7 +540,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     let favs = app.sorted_favorites();
                     if idx < favs.len() {
                         let url = favs[idx].clone();
-                        let name = ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
+                        let name =
+                            ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
                         app.run_mpv(&url, &name, "", false);
                     }
                 }
@@ -488,7 +558,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     let history: Vec<_> = app.config.history.iter().rev().collect();
                     if idx < history.len() {
                         let url = history[idx].clone();
-                        let name = ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
+                        let name =
+                            ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
                         app.run_mpv(&url, &name, "", false);
                     }
                 }
@@ -503,8 +574,13 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Enter => {
                 let idx = app.set_state.selected().unwrap_or(0);
                 match idx {
-                    0 | 1 | 3 | 6 => { app.edit_buf = app.settings_value(idx); app.screen = Screen::SettingsEdit(idx); }
-                    2 | 4 | 5 | 7 | 8 => { app.settings_toggle(idx); }
+                    0 | 1 | 3 | 6 => {
+                        app.edit_buf = app.settings_value(idx);
+                        app.screen = Screen::SettingsEdit(idx);
+                    }
+                    2 | 4 | 5 | 7 | 8 => {
+                        app.settings_toggle(idx);
+                    }
                     _ => {}
                 }
             }
@@ -512,20 +588,23 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             _ => {}
         },
 
-        Screen::SettingsEdit(field) => {
-            match key.code {
-                KeyCode::Char(c) => app.edit_buf.push(c),
-                KeyCode::Backspace => { app.edit_buf.pop(); }
-                KeyCode::Enter => {
-                    let val = app.edit_buf.clone();
-                    app.settings_apply(field, &val);
-                    app.status_msg = Some("Saved".into());
-                    app.screen = Screen::Settings;
-                }
-                KeyCode::Esc => { app.edit_buf.clear(); app.screen = Screen::Settings; }
-                _ => {}
+        Screen::SettingsEdit(field) => match key.code {
+            KeyCode::Char(c) => app.edit_buf.push(c),
+            KeyCode::Backspace => {
+                app.edit_buf.pop();
             }
-        }
+            KeyCode::Enter => {
+                let val = app.edit_buf.clone();
+                app.settings_apply(field, &val);
+                app.status_msg = Some("Saved".into());
+                app.screen = Screen::Settings;
+            }
+            KeyCode::Esc => {
+                app.edit_buf.clear();
+                app.screen = Screen::Settings;
+            }
+            _ => {}
+        },
 
         Screen::Detail => match key.code {
             KeyCode::Up => nav_up(&mut app.epg_state, app.detail_programs.len()),
@@ -553,7 +632,9 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         Screen::AiChat => {} // Handled in main loop
 
         Screen::LocalList | Screen::LinkInput => {
-            if key.code == KeyCode::Esc { app.screen = Screen::MainMenu; }
+            if key.code == KeyCode::Esc {
+                app.screen = Screen::MainMenu;
+            }
         }
     }
 }

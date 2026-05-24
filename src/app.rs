@@ -50,13 +50,13 @@ pub struct App {
     pub radio_state: SharedRadioState,
     pub radio_station_title: String,
     // VU-meter simulation state
-    pub vu_bars: [f32; VU_BARS],         // current smoothed bar heights 0..1
-    pub vu_peaks: [f32; VU_BARS],        // peak indicator positions 0..1
-    pub vu_peak_hold: [u32; VU_BARS],    // ticks remaining at current peak
-    pub radio_start: Option<Instant>,    // when radio started (drives oscillators)
+    pub vu_bars: [f32; VU_BARS],      // current smoothed bar heights 0..1
+    pub vu_peaks: [f32; VU_BARS],     // peak indicator positions 0..1
+    pub vu_peak_hold: [u32; VU_BARS], // ticks remaining at current peak
+    pub radio_start: Option<Instant>, // when radio started (drives oscillators)
     // Marquee scroll state
     pub marquee_offset: usize,
-    pub marquee_tick: u32,               // counts 50ms ticks; advance offset every 5 (=250ms)
+    pub marquee_tick: u32, // counts 50ms ticks; advance offset every 5 (=250ms)
     pub needs_redraw: bool,
     pub debug: bool,
     pub status_msg: Option<String>,
@@ -162,7 +162,10 @@ impl App {
     /// Заполнить channel_names из загруженного плейлиста для favorites/history
     fn backfill_channel_names(&mut self) {
         let mut dirty = false;
-        let urls: Vec<String> = self.config.favorites.iter()
+        let urls: Vec<String> = self
+            .config
+            .favorites
+            .iter()
             .chain(self.config.history.iter())
             .cloned()
             .collect();
@@ -171,7 +174,9 @@ impl App {
                 continue;
             }
             if let Some(ch) = self.data.channels.iter().find(|ch| ch.url == *url) {
-                self.config.channel_names.insert(url.clone(), ch.name.clone());
+                self.config
+                    .channel_names
+                    .insert(url.clone(), ch.name.clone());
                 dirty = true;
             }
         }
@@ -213,7 +218,8 @@ impl App {
             (st.paused, st.muted, st.volume)
         };
 
-        let elapsed_s = self.radio_start
+        let elapsed_s = self
+            .radio_start
             .map(|s| s.elapsed().as_secs_f32())
             .unwrap_or(0.0);
 
@@ -238,8 +244,8 @@ impl App {
 
             let t = elapsed_s;
             let bass = (t * 2.0 + i as f32 * 0.3).sin().abs();
-            let mid  = (t * 5.0 + i as f32 * 0.7).sin().abs() * 0.7;
-            let hi   = (t * 11.0 + i as f32 * 1.3).sin().abs() * 0.5;
+            let mid = (t * 5.0 + i as f32 * 0.7).sin().abs() * 0.7;
+            let hi = (t * 11.0 + i as f32 * 1.3).sin().abs() * 0.5;
             let noise: f32 = rng.gen::<f32>() * 0.2;
 
             let target = (bass * w_bass + mid * w_mid + hi * w_high + noise).min(1.0) * amp_scale;
@@ -270,7 +276,9 @@ impl App {
     // ─── Detail / EPG Playback ────────────────────────────────────────────
 
     pub fn open_detail(&mut self, channel_idx: usize) {
-        if channel_idx >= self.data.channels.len() { return; }
+        if channel_idx >= self.data.channels.len() {
+            return;
+        }
         self.detail_return_screen = Some(self.screen);
         let ch = &self.data.channels[channel_idx];
         self.detail_channel = Some(channel_idx);
@@ -297,7 +305,11 @@ impl App {
         self.detail_current_idx = current_idx;
 
         let select = current_idx.unwrap_or(0);
-        self.epg_state.select(if self.detail_programs.is_empty() { None } else { Some(select) });
+        self.epg_state.select(if self.detail_programs.is_empty() {
+            None
+        } else {
+            Some(select)
+        });
         self.screen = Screen::Detail;
     }
 
@@ -368,7 +380,10 @@ impl App {
 
         if self.debug {
             c.arg("--log-file=/tmp/neon_mpv.log");
-            main_log(&format!("MPV launch: url={} radio={} title={}", url, radio, display_title));
+            main_log(&format!(
+                "MPV launch: url={} radio={} title={}",
+                url, radio, display_title
+            ));
         }
 
         if radio {
@@ -383,11 +398,22 @@ impl App {
             c.stdout(Stdio::null()).stdin(Stdio::null());
             // Redirect stderr to log so failures are visible (not silent)
             match File::create("/tmp/neon_mpv_stderr.log") {
-                Ok(f) => { c.stderr(Stdio::from(f)); }
-                Err(_) => { c.stderr(Stdio::null()); }
+                Ok(f) => {
+                    c.stderr(Stdio::from(f));
+                }
+                Err(_) => {
+                    c.stderr(Stdio::null());
+                }
             }
             #[cfg(unix)]
-            unsafe { c.pre_exec(|| { if libc::setsid() == -1 { return Err(std::io::Error::last_os_error()); } Ok(()) }); }
+            unsafe {
+                c.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
             match c.spawn() {
                 Ok(child) => {
                     self.mpv_handle = Some(child);
@@ -397,7 +423,9 @@ impl App {
                     self.radio_station_title = title.to_string();
                     self.radio_start = Some(Instant::now());
                 }
-                Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
+                Err(e) => {
+                    self.status_msg = Some(format!("MPV error: {}", e));
+                }
             }
         } else {
             c.arg(format!("--title=NEON: {}", display_title))
@@ -406,17 +434,29 @@ impl App {
             if self.config.video_fullscreen {
                 c.arg("--fs");
             } else {
-                c.arg("--no-keepaspect-window").arg(format!("--geometry={}", self.config.video_geometry));
+                c.arg("--no-keepaspect-window")
+                    .arg(format!("--geometry={}", self.config.video_geometry));
             }
             c.arg(url);
-            c.stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
+            c.stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .stdin(Stdio::null());
             #[cfg(unix)]
-            unsafe { c.pre_exec(|| { if libc::setsid() == -1 { return Err(std::io::Error::last_os_error()); } Ok(()) }); }
+            unsafe {
+                c.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
             match c.spawn() {
                 Ok(child) => {
                     self.mpv_handle = Some(child);
                 }
-                Err(e) => { self.status_msg = Some(format!("MPV error: {}", e)); }
+                Err(e) => {
+                    self.status_msg = Some(format!("MPV error: {}", e));
+                }
             }
         }
     }
@@ -429,7 +469,9 @@ impl App {
             _ => return,
         };
         let result = self.ai_results[idx].clone();
-        if result.channel_idx >= self.data.channels.len() { return; }
+        if result.channel_idx >= self.data.channels.len() {
+            return;
+        }
         let ch = &self.data.channels[result.channel_idx];
         let url = ch.url.clone();
         let name = ch.name.clone();
@@ -441,7 +483,10 @@ impl App {
             if is_current || is_future {
                 self.run_mpv(&url, &name, &result.program.title, false);
             } else if ch.catchup_days > 0 {
-                let archive_url = format!("{}?utc={}&lutc={}", url, result.program.start, result.program.stop);
+                let archive_url = format!(
+                    "{}?utc={}&lutc={}",
+                    url, result.program.start, result.program.stop
+                );
                 self.run_mpv(&archive_url, &name, &result.program.title, false);
             } else {
                 self.run_mpv(&url, &name, &result.program.title, false);
@@ -467,25 +512,48 @@ impl App {
     pub fn update_filter(&mut self) {
         let q = self.search.to_lowercase();
         let group = &self.selected_group;
-        self.filtered = self.data.channels.iter().enumerate()
+        self.filtered = self
+            .data
+            .channels
+            .iter()
+            .enumerate()
             .filter(|(_, ch)| ch.group == *group)
             .filter(|(_, ch)| q.is_empty() || ch.name_lower.contains(&q))
-            .map(|(i, _)| i).collect();
+            .map(|(i, _)| i)
+            .collect();
         if self.filtered.is_empty() && !q.is_empty() {
-            self.filtered = self.data.channels.iter().enumerate()
+            self.filtered = self
+                .data
+                .channels
+                .iter()
+                .enumerate()
                 .filter(|(_, ch)| ch.name_lower.contains(&q))
-                .map(|(i, _)| i).collect();
+                .map(|(i, _)| i)
+                .collect();
         }
-        self.ch_state.select(if self.filtered.is_empty() { None } else { Some(0) });
+        self.ch_state.select(if self.filtered.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
         self.needs_redraw = true;
     }
 
     pub fn update_radio_filter(&mut self) {
         let genre = &self.selected_radio_genre;
-        self.filtered_radio = self.data.radio.iter().enumerate()
+        self.filtered_radio = self
+            .data
+            .radio
+            .iter()
+            .enumerate()
             .filter(|(_, r)| genre == "All" || r.genres.contains(genre))
-            .map(|(i, _)| i).collect();
-        self.r_state.select(if self.filtered_radio.is_empty() { None } else { Some(0) });
+            .map(|(i, _)| i)
+            .collect();
+        self.r_state.select(if self.filtered_radio.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
         self.needs_redraw = true;
     }
 
@@ -496,16 +564,33 @@ impl App {
         match idx {
             0 => self.config.playlist_url.clone(),
             1 => self.config.epg_url.clone(),
-            2 => if self.config.video_fullscreen { "ON".into() } else { "OFF".into() },
+            2 => {
+                if self.config.video_fullscreen {
+                    "ON".into()
+                } else {
+                    "OFF".into()
+                }
+            }
             3 => self.config.video_geometry.clone(),
             4 => {
                 let c = self.config.theme_color;
-                THEME_PRESETS.iter().find(|p| (p.0, p.1, p.2) == c)
+                THEME_PRESETS
+                    .iter()
+                    .find(|p| (p.0, p.1, p.2) == c)
                     .map(|p| p.3.to_string())
                     .unwrap_or_else(|| format!("({},{},{})", c.0, c.1, c.2))
             }
-            5 => { let p = crate::ai::LlmProvider::from_str(&self.config.llm_provider); p.name().into() },
-            6 => if self.config.local_dir.is_empty() { "~/  ~/Downloads  ~/Videos".into() } else { self.config.local_dir.clone() },
+            5 => {
+                let p = crate::ai::LlmProvider::from_str(&self.config.llm_provider);
+                p.name().into()
+            }
+            6 => {
+                if self.config.local_dir.is_empty() {
+                    "~/  ~/Downloads  ~/Videos".into()
+                } else {
+                    self.config.local_dir.clone()
+                }
+            }
             7 => format!("{} entries", self.config.history.len()),
             8 => format!("{} entries", self.config.favorites.len()),
             _ => String::new(),
@@ -526,10 +611,16 @@ impl App {
     pub fn settings_toggle(&mut self, idx: usize) {
         use crate::models::THEME_PRESETS;
         match idx {
-            2 => { self.config.video_fullscreen = !self.config.video_fullscreen; let _ = self.config.save(); }
+            2 => {
+                self.config.video_fullscreen = !self.config.video_fullscreen;
+                let _ = self.config.save();
+            }
             4 => {
                 let cur = self.config.theme_color;
-                let pos = THEME_PRESETS.iter().position(|p| (p.0, p.1, p.2) == cur).unwrap_or(0);
+                let pos = THEME_PRESETS
+                    .iter()
+                    .position(|p| (p.0, p.1, p.2) == cur)
+                    .unwrap_or(0);
                 let next = (pos + 1) % THEME_PRESETS.len();
                 let p = THEME_PRESETS[next];
                 self.config.theme_color = (p.0, p.1, p.2);
@@ -540,8 +631,16 @@ impl App {
                 self.config.llm_provider = cur.next().name().to_lowercase().to_string();
                 let _ = self.config.save();
             }
-            7 => { self.config.history.clear(); let _ = self.config.save(); self.status_msg = Some("History cleared".into()); }
-            8 => { self.config.favorites.clear(); let _ = self.config.save(); self.status_msg = Some("Favorites cleared".into()); }
+            7 => {
+                self.config.history.clear();
+                let _ = self.config.save();
+                self.status_msg = Some("History cleared".into());
+            }
+            8 => {
+                self.config.favorites.clear();
+                let _ = self.config.save();
+                self.status_msg = Some("Favorites cleared".into());
+            }
             _ => {}
         }
     }
