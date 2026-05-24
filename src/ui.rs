@@ -13,6 +13,12 @@ const NEON_MAGENTA: Color = Color::Rgb(255, 0, 200);
 const NEON_YELLOW: Color = Color::Rgb(255, 220, 0);
 const NEON_DIM: Color = Color::Rgb(40, 0, 60);
 
+// ─── Radio player height (compact, AIMP-style) ───────────────────────────────
+
+/// Height of the compact neon radio widget in lines (including its border).
+/// VU rows = RADIO_PANEL_H - 6 (header + station + track + controls + border top/bottom)
+const RADIO_PANEL_H: u16 = 12;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel], config: &'a crate::models::Config) -> &'a str {
@@ -22,37 +28,35 @@ pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel], config: &'a cr
     config.channel_name(url)
 }
 
-/// Sanitize a string for display: replace control chars with spaces.
+/// Replace control characters with spaces so terminal doesn't get garbage.
 fn sanitize(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
 }
 
-/// Marquee: return a window of `width` chars from `text` starting at `offset`,
-/// with double-space separator for looping. Safe for any terminal width.
+/// Return a `width`-char window of `text` starting at `offset`, with looping via
+/// a 2-space separator. Safe for any terminal width.
 fn marquee_slice(text: &str, offset: usize, width: usize) -> String {
     if width == 0 || text.is_empty() {
-        return String::new();
+        return " ".repeat(width);
     }
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     if len <= width {
-        // No scrolling needed — pad with spaces
         let mut s: String = chars.iter().collect();
         while s.chars().count() < width {
             s.push(' ');
         }
         return s;
     }
-    // Build looped buffer: text + "  " separator
-    let sep = [' ', ' '];
-    let total = len + sep.len();
+    // Loop: text + "  " separator
+    let total = len + 2;
     let start = offset % total;
     let mut out = String::with_capacity(width);
     for i in 0..width {
         let idx = (start + i) % total;
-        out.push(if idx < len { chars[idx] } else { sep[idx - len] });
+        out.push(if idx < len { chars[idx] } else { ' ' });
     }
     out
 }
@@ -175,13 +179,19 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Radio mode — replace entire content area with NEON RADIO player
-    if app.radio_ipc.is_some() {
-        render_radio_player(f, app, full_area);
-        return;
-    }
+    // When radio is playing: split screen — list on top, compact neon player below.
+    // The list area adapts: only RadioList and RadioCatList actually make sense above
+    // the player, but other screens remain unaffected.
+    let (content_area, radio_panel_area) = if app.radio_ipc.is_some() && full_area.height > RADIO_PANEL_H + 3 {
+        let chunks = Layout::default()
+            .constraints([Constraint::Min(3), Constraint::Length(RADIO_PANEL_H)])
+            .split(full_area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (full_area, None)
+    };
 
-    // ── Normal screen dispatch ─────────────────────────────────────────────
+    // ── Screen Dispatch ───────────────────────────────────────────────────
     match &app.screen {
         Screen::Updating => {
             let text = "\n\n  UPDATING DATA...\n  PLEASE WAIT...";
@@ -190,7 +200,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     .alignment(Alignment::Center)
                     .fg(Color::Yellow)
                     .bold(),
-                full_area,
+                content_area,
             );
         }
 
@@ -201,7 +211,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             } else {
                 vec![Constraint::Length(10), Constraint::Min(0)]
             };
-            let chunks = Layout::default().constraints(constraints).split(full_area);
+            let chunks = Layout::default().constraints(constraints).split(content_area);
             let version = env!("CARGO_PKG_VERSION");
             let status = format!(
                 "   NEON HUB v{}\n   Channels: {}  Radio: {}",
@@ -245,14 +255,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items)
                 .block(Block::default().title(" 📺 Categories ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, full_area, &mut app.cat_state);
+            f.render_stateful_widget(list, content_area, &mut app.cat_state);
         }
 
         Screen::ChanList => {
-            let chunks =
-                Layout::default()
-                    .constraints([Constraint::Min(0), Constraint::Length(3)])
-                    .split(full_area);
+            let chunks = Layout::default()
+                .constraints([Constraint::Min(0), Constraint::Length(3)])
+                .split(content_area);
             let now = Utc::now().timestamp();
             let items: Vec<ListItem> = app
                 .filtered
@@ -279,16 +288,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                             0.0
                         };
                         let filled = (pct * 12.0) as usize;
-                        let bar: String = (0..12)
-                            .map(|i| if i < filled { '▰' } else { '▱' })
-                            .collect();
-                        let bar_color = if pct < 0.3 {
-                            Color::Rgb(0, 200, 120)
-                        } else if pct < 0.7 {
-                            Color::Rgb(200, 200, 0)
-                        } else {
-                            Color::Rgb(255, 100, 60)
-                        };
+                        let bar: String = (0..12).map(|i| if i < filled { '▰' } else { '▱' }).collect();
+                        let bar_color = if pct < 0.3 { Color::Rgb(0, 200, 120) } else if pct < 0.7 { Color::Rgb(200, 200, 0) } else { Color::Rgb(255, 100, 60) };
                         spans.push(Span::styled(format!("  {}", bar), Style::default().fg(bar_color)));
                         spans.push(Span::styled(format!(" {}", p.title), Style::default().fg(Color::Rgb(180, 140, 255))));
                     }
@@ -314,11 +315,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .radio_groups
                 .iter()
                 .map(|g| {
-                    let cnt = if g == "All" {
-                        app.data.radio.len()
-                    } else {
-                        app.data.radio.iter().filter(|r| r.genres.contains(g)).count()
-                    };
+                    let cnt = if g == "All" { app.data.radio.len() }
+                        else { app.data.radio.iter().filter(|r| r.genres.contains(g)).count() };
                     ListItem::new(format!("  {}  {} ({})", radio_genre_icon(g), g, cnt))
                         .style(Style::default().fg(theme))
                 })
@@ -326,7 +324,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items)
                 .block(Block::default().title(" 📻 Radio Genres ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, full_area, &mut app.r_cat_state);
+            f.render_stateful_widget(list, content_area, &mut app.r_cat_state);
         }
 
         Screen::RadioList => {
@@ -336,13 +334,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .map(|&idx| {
                     let st = &app.data.radio[idx];
                     let track = st.track.as_deref().unwrap_or("");
-                    let mut spans =
-                        vec![Span::styled(&st.title, Style::default().fg(Color::White))];
+                    let mut spans = vec![Span::styled(&st.title, Style::default().fg(Color::White))];
                     if !track.is_empty() {
-                        spans.push(Span::styled(
-                            format!("  {}", track),
-                            Style::default().fg(Color::Green),
-                        ));
+                        spans.push(Span::styled(format!("  {}", track), Style::default().fg(Color::Green)));
                     }
                     ListItem::new(Line::from(spans))
                 })
@@ -351,7 +345,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
                 .highlight_style(Style::default().bg(Color::Rgb(0, 30, 0)).fg(Color::Green).bold());
-            f.render_stateful_widget(list, full_area, &mut app.r_state);
+            f.render_stateful_widget(list, content_area, &mut app.r_state);
         }
 
         Screen::Favorites => {
@@ -366,7 +360,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items)
                 .block(Block::default().title(" ⭐ Favorites ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, full_area, &mut app.fav_state);
+            f.render_stateful_widget(list, content_area, &mut app.fav_state);
         }
 
         Screen::History => {
@@ -383,15 +377,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items)
                 .block(Block::default().title(" 🕐 History ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, full_area, &mut app.hist_state);
+            f.render_stateful_widget(list, content_area, &mut app.hist_state);
         }
 
         Screen::Settings => {
-            render_settings(f, app, full_area, None);
+            render_settings(f, app, content_area, None);
         }
 
         Screen::SettingsEdit(field) => {
-            render_settings(f, app, full_area, Some(*field));
+            render_settings(f, app, content_area, Some(*field));
         }
 
         Screen::LocalList => {
@@ -403,224 +397,171 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .style(Style::default().fg(theme))
                 })
                 .collect();
-            let dir_label = if app.config.local_dir.is_empty() {
-                "~/".to_string()
-            } else {
-                app.config.local_dir.clone()
-            };
+            let dir_label = if app.config.local_dir.is_empty() { "~/".to_string() } else { app.config.local_dir.clone() };
             let list = List::new(items)
                 .block(Block::default().title(format!(" 📁 Local Playlists — {} ", dir_label)).borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, full_area, &mut app.d_state);
+            f.render_stateful_widget(list, content_area, &mut app.d_state);
         }
 
         Screen::Detail => {
-            render_detail(f, app, full_area);
+            render_detail(f, app, content_area);
         }
 
         Screen::AiChat => {
-            render_ai_chat(f, app, full_area, theme);
+            render_ai_chat(f, app, content_area, theme);
         }
 
         Screen::LinkInput => {
             f.render_widget(
                 Paragraph::new("\n\n  Not yet implemented.\n  Press ESC to return.")
                     .alignment(Alignment::Center),
-                full_area,
+                content_area,
             );
         }
     }
+
+    // ── Compact neon radio panel (bottom) ─────────────────────────────────
+    if let Some(panel_area) = radio_panel_area {
+        render_radio_panel(f, app, panel_area);
+    }
 }
 
-// ─── NEON RADIO Full-Screen Player ───────────────────────────────────────────
+// ─── Compact NEON RADIO Panel ────────────────────────────────────────────────
 
-fn render_radio_player(f: &mut Frame, app: &App, area: Rect) {
-    // Snapshot IPC state — lock once, release before rendering
+fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
+    // Snapshot IPC state (lock once, release before rendering)
     let (paused, muted, volume, media_title, icy_title, bitrate_kbps) = {
         let st = app.radio_state.lock().unwrap();
         (st.paused, st.muted, st.volume, st.media_title.clone(), st.icy_title.clone(), st.bitrate_kbps)
     };
 
-    // Outer neon border
+    let status_icon = if muted { "🔇" } else if paused { "⏸" } else { "▶" };
+    let play_icon = if paused { "▶ " } else { "⏸" };
+    let mute_icon = if muted { "🔇" } else { "🔊" };
+    let status_color = if paused || muted { Color::DarkGray } else { Color::Rgb(0, 255, 100) };
+
+    let bitrate_str = if bitrate_kbps > 0 {
+        format!(" ♪ {}kbps", bitrate_kbps)
+    } else {
+        " ♪ ---".to_string()
+    };
+
+    // Outer neon border with title
     let outer = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(NEON_CYAN))
         .title(Line::from(vec![
-            Span::styled(" ░▒▓", Style::default().fg(NEON_DIM)),
-            Span::styled("█ NEON RADIO █", Style::default().fg(NEON_CYAN).bold()),
-            Span::styled("▓▒░ ", Style::default().fg(NEON_DIM)),
+            Span::styled(" ░▒▓█ NEON RADIO █▓▒░", Style::default().fg(NEON_CYAN).bold()),
+            Span::styled(bitrate_str, Style::default().fg(NEON_MAGENTA)),
+            Span::raw(" "),
         ]));
     f.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
 
-    // Guard: need at least 12 rows to render meaningfully
-    if inner.height < 12 {
-        f.render_widget(
-            Paragraph::new("Terminal too small").fg(NEON_CYAN).alignment(Alignment::Center),
-            inner,
-        );
+    // Guard: at minimum need 4 rows for station + track + controls + 1 VU row
+    if inner.height < 4 {
         return;
     }
 
-    // Layout: header(3) | info(3) | vu(flexible, min 6) | controls(3) | hint(1)
-    let vu_height = inner.height.saturating_sub(3 + 3 + 3 + 1).max(6);
+    // Layout inside panel:
+    // station+track = 2 lines, controls = 1 line, rest = VU meters
+    let vu_h = inner.height.saturating_sub(3).max(1);
     let chunks = Layout::default()
         .constraints([
-            Constraint::Length(3),             // header: status + bitrate
-            Constraint::Length(3),             // station + track marquee
-            Constraint::Length(vu_height),     // VU meters
-            Constraint::Length(3),             // controls + volume slider
-            Constraint::Length(1),             // hint bar
+            Constraint::Length(2),   // station + track marquee
+            Constraint::Length(vu_h), // VU meters
+            Constraint::Length(1),   // controls + volume + hint
         ])
         .split(inner);
 
-    // ── Header ────────────────────────────────────────────────────────────
-    render_radio_header(f, chunks[0], paused, muted, bitrate_kbps);
-
-    // ── Station & Track ───────────────────────────────────────────────────
-    render_radio_info(f, app, chunks[1], &media_title, &icy_title);
-
-    // ── VU Meters ─────────────────────────────────────────────────────────
-    render_vu_meters(f, app, chunks[2]);
-
-    // ── Controls + Volume ─────────────────────────────────────────────────
-    render_radio_controls(f, chunks[3], paused, muted, volume);
-
-    // ── Hint ──────────────────────────────────────────────────────────────
-    f.render_widget(
-        Paragraph::new(
-            " [SPACE] play/pause   [↑↓] volume   [M] mute   [Esc] stop "
-        )
-        .alignment(Alignment::Center)
-        .fg(Color::Rgb(80, 80, 110)),
-        chunks[4],
-    );
-}
-
-fn render_radio_header(f: &mut Frame, area: Rect, paused: bool, muted: bool, bitrate_kbps: u32) {
-    let status_text = if muted {
-        "🔇 MUTED"
-    } else if paused {
-        "⏸ PAUSED"
-    } else {
-        "▶ ON AIR"
-    };
-    let status_color = if paused || muted { Color::DarkGray } else { Color::Rgb(0, 255, 100) };
-
-    let bitrate_str = if bitrate_kbps > 0 {
-        format!("♪ {}kbps", bitrate_kbps)
-    } else {
-        "♪ ---kbps".to_string()
-    };
-
-    // Split header into left (status) and right (bitrate)
-    let hchunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(14)])
-        .split(area);
-
-    f.render_widget(
-        Paragraph::new(format!("  {}", status_text))
-            .fg(status_color)
-            .bold()
-            .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(NEON_DIM))),
-        hchunks[0],
-    );
-    f.render_widget(
-        Paragraph::new(format!("{}  ", bitrate_str))
-            .alignment(Alignment::Right)
-            .fg(NEON_MAGENTA)
-            .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(NEON_DIM))),
-        hchunks[1],
-    );
-}
-
-fn render_radio_info(f: &mut Frame, app: &App, area: Rect, media_title: &str, icy_title: &str) {
-    let inner_w = area.width.saturating_sub(4) as usize;
-
-    // Station name (top row)
+    // ── Station & Track (marquee) ─────────────────────────────────────────
+    let inner_w = inner.width.saturating_sub(4) as usize;
     let station = sanitize(&app.radio_station_title);
-    let station_line = marquee_slice(&station, app.marquee_offset / 2, inner_w); // slower
-
-    // Track (bottom row) — icy-title or media-title
-    let track_raw = if !icy_title.is_empty() {
-        icy_title
-    } else if !media_title.is_empty() {
-        media_title
-    } else {
-        ""
-    };
+    let track_raw = if !icy_title.is_empty() { icy_title.as_str() }
+        else if !media_title.is_empty() { media_title.as_str() }
+        else { "" };
     let track = sanitize(track_raw);
-    let track_line = marquee_slice(&track, app.marquee_offset, inner_w);
 
-    let lines = vec![
+    let station_line = marquee_slice(&station, app.marquee_offset / 2, inner_w.saturating_sub(12));
+    let track_line = marquee_slice(&track, app.marquee_offset, inner_w.saturating_sub(12));
+
+    let info_lines = vec![
         Line::from(vec![
-            Span::styled("  STATION: ", Style::default().fg(Color::Rgb(100, 100, 140))),
+            Span::styled(format!(" {} ", status_icon), Style::default().fg(status_color).bold()),
             Span::styled(station_line, Style::default().fg(NEON_CYAN).bold()),
         ]),
         Line::from(vec![
-            Span::styled("  PLAYING: ", Style::default().fg(Color::Rgb(100, 100, 140))),
+            Span::styled("  ◂◂ ", Style::default().fg(NEON_DIM)),
             Span::styled(track_line, Style::default().fg(Color::White)),
+            Span::styled(" ◂◂", Style::default().fg(NEON_DIM)),
         ]),
     ];
+    f.render_widget(Paragraph::new(info_lines), chunks[0]);
 
-    f.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(NEON_DIM)),
-        ),
-        area,
-    );
+    // ── VU Meters ─────────────────────────────────────────────────────────
+    render_vu_meters(f, app, chunks[1]);
+
+    // ── Controls + Volume + Hint (single line) ────────────────────────────
+    let vol_w = (inner.width as usize).saturating_sub(55).max(6); // adaptive slider width
+    let pct = (volume / 100.0).clamp(0.0, 1.0);
+    let filled = (pct * vol_w as f64) as usize;
+    let bar_color = lerp_color((0, 255, 229), (255, 0, 200), pct as f32);
+    let filled_str: String = std::iter::repeat('━').take(filled).collect();
+    let empty_str: String = std::iter::repeat('─').take(vol_w.saturating_sub(filled)).collect();
+
+    let ctrl_line = Line::from(vec![
+        Span::styled(format!(" ◀◀ {} ■ {}  ", play_icon, mute_icon), Style::default().fg(NEON_CYAN).bold()),
+        Span::styled("VOL ", Style::default().fg(Color::Rgb(100, 100, 140))),
+        Span::styled("●", Style::default().fg(NEON_CYAN)),
+        Span::styled(filled_str, Style::default().fg(bar_color)),
+        Span::styled(empty_str, Style::default().fg(Color::Rgb(40, 40, 60))),
+        Span::styled(format!(" {:.0}%  ", volume), Style::default().fg(NEON_CYAN).bold()),
+        Span::styled("+/-:vol  Space:pause  M:mute  Esc:stop", Style::default().fg(Color::Rgb(70, 70, 100))),
+    ]);
+    f.render_widget(Paragraph::new(ctrl_line), chunks[2]);
 }
 
+// ─── VU Meters ───────────────────────────────────────────────────────────────
+
 fn render_vu_meters(f: &mut Frame, app: &App, area: Rect) {
-    // How many bars fit in the area (each bar is 2 chars wide: symbol + space)
     let usable_w = area.width.saturating_sub(2) as usize;
     let n_bars = (usable_w / 2).min(VU_BARS).max(1);
-    let bar_h = area.height.saturating_sub(1) as usize; // 1 line reserved for peak row
-    if bar_h == 0 {
+    let bar_h = area.height as usize;
+    if bar_h == 0 || n_bars == 0 {
         return;
     }
 
-    // Block chars for sub-cell precision (1/8 increments)
     let block_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let mut lines: Vec<Line> = Vec::with_capacity(bar_h);
 
-    // Build lines bottom-up: line 0 = top (highest), line bar_h-1 = bottom (lowest)
-    let mut lines: Vec<Line> = Vec::with_capacity(bar_h + 1);
-
-    // Peak row on top
-    let peak_row: Line = {
-        let mut spans = vec![Span::raw(" ")];
-        for i in 0..n_bars {
-            let peak_row_idx = ((1.0 - app.vu_peaks[i]) * bar_h as f32) as usize;
-            // peak_row_idx == 0 means peak is at very top
-            let ch = if peak_row_idx == 0 { '▔' } else { ' ' };
-            spans.push(Span::styled(ch.to_string(), Style::default().fg(NEON_YELLOW)));
-            spans.push(Span::raw(" "));
-        }
-        Line::from(spans)
-    };
-    lines.push(peak_row);
-
-    // Body rows
     for row in 0..bar_h {
         // row 0 = top, row bar_h-1 = bottom
-        // threshold: what fraction of bar_h this row represents (from top)
         let row_threshold = 1.0 - (row as f32 / bar_h as f32);
+        let row_lower = 1.0 - ((row + 1) as f32 / bar_h as f32);
 
         let mut spans = vec![Span::raw(" ")];
         for i in 0..n_bars {
-            let h = app.vu_bars[i]; // 0..1
+            let h = app.vu_bars[i];
+            let peak = app.vu_peaks[i];
 
-            let ch = if h >= row_threshold {
-                // Full block in this row
+            // Peak indicator: show ▔ in the row where peak sits
+            let peak_row_f = (1.0 - peak) * bar_h as f32;
+            let peak_row = peak_row_f as usize;
+            let is_peak_row = peak_row == row && peak > 0.01;
+
+            let ch = if is_peak_row {
+                // Peak dot overrides bar content
+                '▔'
+            } else if h >= row_threshold {
                 '█'
             } else {
-                let lower = 1.0 - ((row + 1) as f32 / bar_h as f32);
-                // Partial fill for the topmost active cell
-                let frac = (h - lower) / (row_threshold - lower);
-                if frac > 0.0 {
+                let frac = if row_threshold > row_lower {
+                    (h - row_lower) / (row_threshold - row_lower)
+                } else {
+                    0.0
+                };
+                if frac > 0.01 {
                     let idx = ((frac * 8.0) as usize).min(7);
                     block_chars[idx]
                 } else {
@@ -628,40 +569,32 @@ fn render_vu_meters(f: &mut Frame, app: &App, area: Rect) {
                 }
             };
 
-            // Color gradient: bottom=cyan, middle=magenta, top=yellow
-            let color = vu_color(row, bar_h);
+            let color = if is_peak_row {
+                NEON_YELLOW
+            } else {
+                vu_color(row, bar_h)
+            };
             spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
             spans.push(Span::raw(" "));
         }
         lines.push(Line::from(spans));
     }
 
-    f.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-                .border_style(Style::default().fg(NEON_DIM)),
-        ),
-        area,
-    );
+    f.render_widget(Paragraph::new(lines), area);
 }
 
-/// VU color gradient by row: top=yellow, mid=magenta, bottom=cyan
+/// VU color: top row = yellow/orange, mid = magenta, bottom = cyan
 fn vu_color(row: usize, total_rows: usize) -> Color {
     if total_rows == 0 {
         return NEON_CYAN;
     }
-    // row 0 = top, row total_rows-1 = bottom
     let t = row as f32 / total_rows as f32; // 0=top, 1=bottom
     if t < 0.25 {
-        // top quarter: yellow → magenta
         let blend = t / 0.25;
         lerp_color((255, 220, 0), (255, 0, 200), blend)
     } else if t < 0.6 {
-        // mid: magenta
         NEON_MAGENTA
     } else {
-        // bottom: magenta → cyan
         let blend = (t - 0.6) / 0.4;
         lerp_color((255, 0, 200), (0, 255, 229), blend)
     }
@@ -674,58 +607,6 @@ fn lerp_color(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> Color {
         (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
         (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
     )
-}
-
-fn render_radio_controls(f: &mut Frame, area: Rect, paused: bool, muted: bool, volume: f64) {
-    // Split into buttons (left) and volume slider (right)
-    let hchunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(26), Constraint::Min(0)])
-        .split(area);
-
-    // Buttons row
-    let play_icon = if paused { "▶ " } else { "⏸" };
-    let mute_icon = if muted { "🔇" } else { "🔊" };
-    let btn_text = format!(" ◀◀  {}  ■  {}  ", play_icon, mute_icon);
-    f.render_widget(
-        Paragraph::new(btn_text)
-            .fg(NEON_CYAN)
-            .bold()
-            .block(
-                Block::default()
-                    .borders(Borders::TOP)
-                    .border_style(Style::default().fg(NEON_DIM)),
-            ),
-        hchunks[0],
-    );
-
-    // Volume slider
-    let vol_w = hchunks[1].width.saturating_sub(12) as usize; // leave room for "VOL " and " XX%"
-    let vol_w = vol_w.max(4);
-    let pct = (volume / 100.0).clamp(0.0, 1.0);
-    let filled = (pct * vol_w as f64) as usize;
-
-    // Color the filled portion cyan→magenta based on volume
-    let bar_color = lerp_color((0, 255, 229), (255, 0, 200), pct as f32);
-    let filled_str: String = std::iter::repeat('━').take(filled).collect();
-    let empty_str: String = std::iter::repeat('─').take(vol_w.saturating_sub(filled)).collect();
-
-    let vol_line = Line::from(vec![
-        Span::styled(" VOL ", Style::default().fg(Color::Rgb(100, 100, 140))),
-        Span::styled("●", Style::default().fg(NEON_CYAN)),
-        Span::styled(filled_str, Style::default().fg(bar_color)),
-        Span::styled(empty_str, Style::default().fg(Color::Rgb(40, 40, 60))),
-        Span::styled(format!(" {:.0}%", volume), Style::default().fg(NEON_CYAN).bold()),
-    ]);
-
-    f.render_widget(
-        Paragraph::new(vol_line).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(NEON_DIM)),
-        ),
-        hchunks[1],
-    );
 }
 
 // ─── Detail Screen ───────────────────────────────────────────────────────────
@@ -757,18 +638,14 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
         String::new()
     };
     let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                format!(" {}{}", &ch.name, fav_marker),
-                Style::default().fg(theme).bold(),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!(" {}{}", ch.group, archive_info),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            format!(" {}{}", &ch.name, fav_marker),
+            Style::default().fg(theme).bold(),
+        )]),
+        Line::from(vec![Span::styled(
+            format!(" {}{}", ch.group, archive_info),
+            Style::default().fg(Color::DarkGray),
+        )]),
     ])
     .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray)));
     f.render_widget(header, chunks[0]);
@@ -1004,11 +881,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         let chars: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
         wrapped_total += if inner_w > 0 && chars > inner_w { chars.div_ceil(inner_w) } else { 1 };
     }
-    let scroll = if wrapped_total > visible_h {
-        (wrapped_total - visible_h) as u16
-    } else {
-        0
-    };
+    let scroll = if wrapped_total > visible_h { (wrapped_total - visible_h) as u16 } else { 0 };
 
     f.render_widget(
         Paragraph::new(chat_lines)
