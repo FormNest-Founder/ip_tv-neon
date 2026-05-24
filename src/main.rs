@@ -296,33 +296,39 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         return;
     }
 
-    // Radio controls — handled while mpv is running in background
+    // Radio IPC controls — intercept only radio-specific keys.
+    // Up/Down are NOT consumed here — they fall through to normal screen handlers
+    // so the station list remains navigable while radio plays.
     if app.radio_ipc.is_some() {
         let cur_vol = app.radio_state.lock().unwrap().volume;
         match key.code {
-            KeyCode::Up | KeyCode::Char('+') => {
+            KeyCode::Char('+') | KeyCode::Char('=') => {
                 if let Some(ref ipc) = app.radio_ipc {
                     ipc.set_volume((cur_vol + 5.0).min(100.0));
                 }
+                return;
             }
-            KeyCode::Down | KeyCode::Char('-') => {
+            KeyCode::Char('-') => {
                 if let Some(ref ipc) = app.radio_ipc {
                     ipc.set_volume((cur_vol - 5.0).max(0.0));
                 }
+                return;
             }
             KeyCode::Char(' ') => {
                 if let Some(ref ipc) = app.radio_ipc { ipc.toggle_pause(); }
+                return;
             }
             KeyCode::Char('m') => {
                 let muted = app.radio_state.lock().unwrap().muted;
                 if let Some(ref ipc) = app.radio_ipc { ipc.set_mute(!muted); }
+                return;
             }
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Esc => {
                 app.stop_all();
+                return;
             }
-            _ => {}
+            _ => {}  // All other keys (including ↑↓ Enter) fall through to screen handlers
         }
-        return;
     }
 
     // TV/other mpv running — only Esc handled
