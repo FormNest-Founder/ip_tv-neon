@@ -17,6 +17,8 @@ pub struct RadioState {
     pub volume: f64,
     pub paused: bool,
     pub muted: bool,
+    /// Audio bitrate in kbps (0 = unknown)
+    pub bitrate_kbps: u32,
 }
 
 pub type SharedRadioState = Arc<Mutex<RadioState>>;
@@ -95,6 +97,7 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
             r#"{"command":["observe_property",3,"mute"]}"#,
             r#"{"command":["observe_property",4,"media-title"]}"#,
             r#"{"command":["observe_property",5,"metadata"]}"#,
+            r#"{"command":["observe_property",6,"audio-bitrate"]}"#,
         ];
         for sub in &subs {
             let msg = format!("{}\n", sub);
@@ -173,13 +176,18 @@ fn handle_event(text: &str, state: &SharedRadioState) {
             }
         }
         "metadata" => {
-            // Look for icy-title or title key
             let title = data.get("icy-title")
                 .or_else(|| data.get("title"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
             st.icy_title = title;
+        }
+        "audio-bitrate" => {
+            // mpv reports bitrate in bits/s as float
+            if let Some(bps) = data.as_f64() {
+                st.bitrate_kbps = (bps / 1000.0).round() as u32;
+            }
         }
         _ => {}
     }
