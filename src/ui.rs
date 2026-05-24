@@ -721,14 +721,16 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
 fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     // Snapshot IPC state (lock once, release before rendering)
-    let (paused, muted, volume, media_title, icy_title, bitrate_kbps) = {
+    let (paused, muted, volume, media_title, icy_name, meta_artist, meta_track, bitrate_kbps) = {
         let st = app.radio_state.lock().unwrap();
         (
             st.paused,
             st.muted,
             st.volume,
             st.media_title.clone(),
-            st.icy_title.clone(),
+            st.icy_name.clone(),
+            st.meta_artist.clone(),
+            st.meta_track.clone(),
             st.bitrate_kbps,
         )
     };
@@ -743,9 +745,9 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     let play_icon = if paused { "▶ " } else { "⏸" };
     let mute_icon = if muted { "🔇" } else { "🔊" };
     let status_color = if paused || muted {
-        Color::DarkGray
+        Color::Rgb(100, 100, 120)
     } else {
-        Color::Rgb(0, 255, 100)
+        Color::Rgb(0, 255, 130)
     };
 
     let bitrate_str = if bitrate_kbps > 0 {
@@ -769,58 +771,70 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
 
-    // Guard: at minimum need 4 rows for station + track + controls + 1 VU row
-    if inner.height < 4 {
+    // Guard: need at least 5 rows
+    if inner.height < 5 {
         return;
     }
 
-    // Layout inside panel:
-    // station+track = 2 lines, controls = 1 line, rest = VU meters
-    let vu_h = inner.height.saturating_sub(3).max(1);
+    // Layout: station(1) + marquee(1) + vu(flex) + controls(1) + hint(1)
+    let vu_h = inner.height.saturating_sub(4).max(1);
     let chunks = Layout::default()
         .constraints([
-            Constraint::Length(2),    // station + track marquee
+            Constraint::Length(1),    // station name
+            Constraint::Length(1),    // track marquee
             Constraint::Length(vu_h), // VU meters
-            Constraint::Length(1),    // controls + volume + hint
+            Constraint::Length(1),    // controls + volume slider
+            Constraint::Length(1),    // hint (separate line — no wrapping)
         ])
         .split(inner);
 
-    // ── Station & Track (marquee) ─────────────────────────────────────────
-    let inner_w = inner.width.saturating_sub(4) as usize;
-    let station = sanitize(&app.radio_station_title);
-    let track_raw = if !icy_title.is_empty() {
-        icy_title.as_str()
-    } else if !media_title.is_empty() {
-        media_title.as_str()
+    // ── Station line ──────────────────────────────────────────────────────
+    // Prefer icy-name from stream metadata, fall back to playlist title
+    let station_display = if !icy_name.is_empty() {
+        sanitize(&icy_name)
     } else {
-        ""
+        sanitize(&app.radio_station_title)
     };
-    let track = sanitize(track_raw);
+    let inner_w = inner.width.saturating_sub(4) as usize;
+    let station_w = inner_w.saturating_sub(4); // leave room for " ▶  " prefix
 
-    let station_line = marquee_slice(&station, app.marquee_offset / 2, inner_w.saturating_sub(12));
-    let track_line = marquee_slice(&track, app.marquee_offset, inner_w.saturating_sub(12));
+    let station_line = Line::from(vec![
+        Span::styled(
+            format!(" {} ", status_icon),
+            Style::default().fg(status_color).bold(),
+        ),
+        Span::styled(
+            marquee_slice(&station_display, app.marquee_offset / 3, station_w),
+            Style::default()
+                .fg(Color::Rgb(0, 240, 255))
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(station_line), chunks[0]);
 
-    let info_lines = vec![
-        Line::from(vec![
-            Span::styled(
-                format!(" {} ", status_icon),
-                Style::default().fg(status_color).bold(),
-            ),
-            Span::styled(station_line, Style::default().fg(NEON_CYAN).bold()),
-        ]),
-        Line::from(vec![
-            Span::styled("  ◂◂ ", Style::default().fg(NEON_DIM)),
-            Span::styled(track_line, Style::default().fg(Color::White)),
-            Span::styled(" ◂◂", Style::default().fg(NEON_DIM)),
-        ]),
-    ];
-    f.render_widget(Paragraph::new(info_lines), chunks[0]);
+    // ── Track marquee: "Station │ Artist │ Track" ─────────────────────────
+    // Build the composite marquee string from available metadata pieces.
+    let marquee_text = build_marquee_text(
+        &app.radio_station_title,
+        &meta_artist,
+        &meta_track,
+        &media_title,
+    );
+    let track_line = Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            marquee_slice(&marquee_text, app.marquee_offset, inner_w.saturating_sub(2)),
+            Style::default().fg(Color::Rgb(200, 220, 255)),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(track_line), chunks[1]);
 
     // ── VU Meters ─────────────────────────────────────────────────────────
-    render_vu_meters(f, app, chunks[1]);
+    render_vu_meters(f, app, chunks[2]);
 
-    // ── Controls + Volume + Hint (single line) ────────────────────────────
-    let vol_w = (inner.width as usize).saturating_sub(55).max(6); // adaptive slider width
+    // ── Controls + Volume slider ───────────────────────────────────────────
+    // Reserve chars: " ◀◀ ▶  ■ 🔊  VOL ●" = ~18, " XXX%  " = 6 → vol_w = rest
+    let vol_w = (inner.width as usize).saturating_sub(26).max(4);
     let pct = (volume / 100.0).clamp(0.0, 1.0);
     let filled = (pct * vol_w as f64) as usize;
     let bar_color = lerp_color((0, 255, 229), (255, 0, 200), pct as f32);
@@ -832,20 +846,61 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
             format!(" ◀◀ {} ■ {}  ", play_icon, mute_icon),
             Style::default().fg(NEON_CYAN).bold(),
         ),
-        Span::styled("VOL ", Style::default().fg(Color::Rgb(100, 100, 140))),
+        Span::styled("VOL ", Style::default().fg(Color::Rgb(140, 160, 200))),
         Span::styled("●", Style::default().fg(NEON_CYAN)),
         Span::styled(filled_str, Style::default().fg(bar_color)),
-        Span::styled(empty_str, Style::default().fg(Color::Rgb(40, 40, 60))),
+        Span::styled(empty_str, Style::default().fg(Color::Rgb(35, 35, 55))),
         Span::styled(
-            format!(" {:.0}%  ", volume),
-            Style::default().fg(NEON_CYAN).bold(),
-        ),
-        Span::styled(
-            "+/-:vol  Space:pause  M:mute  Esc:stop",
-            Style::default().fg(Color::Rgb(70, 70, 100)),
+            format!(" {:.0}%", volume),
+            Style::default()
+                .fg(Color::Rgb(220, 240, 255))
+                .add_modifier(Modifier::BOLD),
         ),
     ]);
-    f.render_widget(Paragraph::new(ctrl_line), chunks[2]);
+    f.render_widget(Paragraph::new(ctrl_line), chunks[3]);
+
+    // ── Adaptive hint (own line — no truncation possible via overflow) ────
+    let hint = adaptive_hint(inner.width);
+    f.render_widget(
+        Paragraph::new(hint).fg(Color::Rgb(120, 140, 180)),
+        chunks[4],
+    );
+}
+
+/// Build the composite marquee text: "Station │ Artist │ Track"
+/// Skips empty segments and joins remaining ones with " │ ".
+fn build_marquee_text(
+    station: &str,
+    artist: &str,
+    track: &str,
+    media_title: &str,
+) -> String {
+    // If we have structured metadata — build rich format
+    if !track.is_empty() {
+        let mut parts: Vec<&str> = vec![station];
+        if !artist.is_empty() {
+            parts.push(artist);
+        }
+        parts.push(track);
+        return parts.join(" │ ");
+    }
+    // Fall back to media_title (mpv's best guess)
+    if !media_title.is_empty() {
+        return format!("{} │ {}", station, media_title);
+    }
+    // Nothing — just station name (marquee will scroll if long)
+    station.to_string()
+}
+
+/// Return a hint string that fits into `width` terminal columns.
+fn adaptive_hint(width: u16) -> &'static str {
+    if width >= 72 {
+        "  Space:⏸/▶   + / -:Vol   M:🔇   ↑↓:Station   Enter:Play   Esc:■ Stop"
+    } else if width >= 52 {
+        "  Sp:⏸  ±:Vol  M:🔇  ↑↓:Sta  Esc:■"
+    } else {
+        "  ⏸ ± 🔇 ↑↓ ■"
+    }
 }
 
 // ─── VU Meters ───────────────────────────────────────────────────────────────
