@@ -337,7 +337,7 @@ pub fn save_data(data: AppData) -> Result<()> {
     bincode::serialize_into(
         writer,
         &CacheContainer {
-            version: APP_VERSION,
+            version: CACHE_SCHEMA_VERSION,
             data,
         },
     )?;
