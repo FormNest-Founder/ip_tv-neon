@@ -1,27 +1,66 @@
 // ─── Imports ─────────────────────────────────────────────────────────────────
 
-use crate::app::App;
+use crate::app::{App, VU_BARS};
 use crate::epg::get_current_epg;
 use crate::models::{Channel, Screen, SETTINGS_COUNT, SETTINGS_LABELS};
 use chrono::Utc;
 use ratatui::{prelude::*, widgets::*};
 
+// ─── Neon Palette ─────────────────────────────────────────────────────────────
+
+const NEON_CYAN: Color = Color::Rgb(0, 255, 229);
+const NEON_MAGENTA: Color = Color::Rgb(255, 0, 200);
+const NEON_YELLOW: Color = Color::Rgb(255, 220, 0);
+const NEON_DIM: Color = Color::Rgb(40, 0, 60);
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 pub fn get_name_by_url<'a>(url: &'a str, channels: &'a [Channel], config: &'a crate::models::Config) -> &'a str {
-    // 1. Из загруженного плейлиста
     if let Some(ch) = channels.iter().find(|ch| ch.url == url) {
         return ch.name.as_str();
     }
-    // 2. Из кешированных имён в конфиге
     config.channel_name(url)
+}
+
+/// Sanitize a string for display: replace control chars with spaces.
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+/// Marquee: return a window of `width` chars from `text` starting at `offset`,
+/// with double-space separator for looping. Safe for any terminal width.
+fn marquee_slice(text: &str, offset: usize, width: usize) -> String {
+    if width == 0 || text.is_empty() {
+        return String::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if len <= width {
+        // No scrolling needed — pad with spaces
+        let mut s: String = chars.iter().collect();
+        while s.chars().count() < width {
+            s.push(' ');
+        }
+        return s;
+    }
+    // Build looped buffer: text + "  " separator
+    let sep = [' ', ' '];
+    let total = len + sep.len();
+    let start = offset % total;
+    let mut out = String::with_capacity(width);
+    for i in 0..width {
+        let idx = (start + i) % total;
+        out.push(if idx < len { chars[idx] } else { sep[idx - len] });
+    }
+    out
 }
 
 // ─── Category Icons ─────────────────────────────────────────────────────────
 
 fn category_icon(name: &str) -> &'static str {
     let n = name.to_lowercase();
-    // Countries & regions
     if n.contains("usa") || n.contains("сша") || n.contains("america") { return "🇺🇸"; }
     if n.contains("belarus") || n.contains("белар") { return "🇧🇾"; }
     if n.contains("russia") || n.contains("росси") || n.contains("рф") { return "🇷🇺"; }
@@ -52,7 +91,6 @@ fn category_icon(name: &str) -> &'static str {
     if n.contains("europe") || n.contains("европ") { return "🌍"; }
     if n.contains("asia") || n.contains("азия") { return "🌏"; }
     if n.contains("internat") || n.contains("междунар") || n.contains("world") || n.contains("мир") { return "🌐"; }
-    // Content types
     if n.contains("кино") || n.contains("фильм") || n.contains("movie") || n.contains("cinema") { return "🎬"; }
     if n.contains("сериал") || n.contains("series") { return "🎭"; }
     if n.contains("мульт") || n.contains("cartoon") || n.contains("kids") || n.contains("детск") || n.contains("child") { return "🧸"; }
@@ -137,17 +175,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Split area: main content + optional Now Playing bar (radio mode)
-    let (area, np_area) = if app.radio_ipc.is_some() {
-        let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(3)])
-            .split(full_area);
-        (chunks[0], Some(chunks[1]))
-    } else {
-        (full_area, None)
-    };
+    // Radio mode — replace entire content area with NEON RADIO player
+    if app.radio_ipc.is_some() {
+        render_radio_player(f, app, full_area);
+        return;
+    }
 
-    // ── Screen Dispatch ───────────────────────────────────────────────────
+    // ── Normal screen dispatch ─────────────────────────────────────────────
     match &app.screen {
         Screen::Updating => {
             let text = "\n\n  UPDATING DATA...\n  PLEASE WAIT...";
@@ -156,7 +190,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     .alignment(Alignment::Center)
                     .fg(Color::Yellow)
                     .bold(),
-                area,
+                full_area,
             );
         }
 
@@ -167,7 +201,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             } else {
                 vec![Constraint::Length(10), Constraint::Min(0)]
             };
-            let chunks = Layout::default().constraints(constraints).split(area);
+            let chunks = Layout::default().constraints(constraints).split(full_area);
             let version = env!("CARGO_PKG_VERSION");
             let status = format!(
                 "   NEON HUB v{}\n   Channels: {}  Radio: {}",
@@ -210,20 +244,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .collect();
             let list = List::new(items)
                 .block(Block::default().title(" 📺 Categories ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
-                .highlight_style(
-                    Style::default()
-                        .bg(theme)
-                        .fg(Color::Black)
-                        .bold(),
-                );
-            f.render_stateful_widget(list, area, &mut app.cat_state);
+                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+            f.render_stateful_widget(list, full_area, &mut app.cat_state);
         }
 
         Screen::ChanList => {
             let chunks =
                 Layout::default()
                     .constraints([Constraint::Min(0), Constraint::Length(3)])
-                    .split(area);
+                    .split(full_area);
             let now = Utc::now().timestamp();
             let items: Vec<ListItem> = app
                 .filtered
@@ -232,10 +261,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     let ch = &app.data.channels[idx];
                     let is_fav = app.config.favorites.contains(&ch.url);
                     let has_archive = ch.catchup_days > 0;
-
                     let mut spans: Vec<Span> = Vec::new();
-
-                    // Markers: fav + archive
                     if is_fav {
                         spans.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
                     }
@@ -245,14 +271,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     if !is_fav && !has_archive {
                         spans.push(Span::raw("  "));
                     }
-
-                    // Channel name
-                    spans.push(Span::styled(
-                        &ch.name,
-                        Style::default().fg(Color::White),
-                    ));
-
-                    // EPG: progress bar + title
+                    spans.push(Span::styled(&ch.name, Style::default().fg(Color::White)));
                     if let Some(p) = get_current_epg(ch, &app.data, now) {
                         let pct = if p.stop > p.start {
                             ((now - p.start) as f64 / (p.stop - p.start) as f64).clamp(0.0, 1.0)
@@ -270,14 +289,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         } else {
                             Color::Rgb(255, 100, 60)
                         };
-                        spans.push(Span::styled(
-                            format!("  {}", bar),
-                            Style::default().fg(bar_color),
-                        ));
-                        spans.push(Span::styled(
-                            format!(" {}", p.title),
-                            Style::default().fg(Color::Rgb(180, 140, 255)),
-                        ));
+                        spans.push(Span::styled(format!("  {}", bar), Style::default().fg(bar_color)));
+                        spans.push(Span::styled(format!(" {}", p.title), Style::default().fg(Color::Rgb(180, 140, 255))));
                     }
                     ListItem::new(Line::from(spans))
                 })
@@ -285,18 +298,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let title = format!(" {} ({}) ", app.selected_group, app.filtered.len());
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
-                .highlight_style(
-                    Style::default()
-                        .bg(Color::Rgb(0, 40, 40))
-                        .fg(Color::Cyan)
-                        .bold(),
-                );
+                .highlight_style(Style::default().bg(Color::Rgb(0, 40, 40)).fg(Color::Cyan).bold());
             f.render_stateful_widget(list, chunks[0], &mut app.ch_state);
             f.render_widget(
                 Paragraph::new(format!(" SEARCH: {}", app.search)).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow)),
+                    Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)),
                 ),
                 chunks[1],
             );
@@ -319,13 +325,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .collect();
             let list = List::new(items)
                 .block(Block::default().title(" 📻 Radio Genres ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
-                .highlight_style(
-                    Style::default()
-                        .bg(theme)
-                        .fg(Color::Black)
-                        .bold(),
-                );
-            f.render_stateful_widget(list, area, &mut app.r_cat_state);
+                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+            f.render_stateful_widget(list, full_area, &mut app.r_cat_state);
         }
 
         Screen::RadioList => {
@@ -346,20 +347,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
-            let title = format!(
-                " Radio: {} ({}) ",
-                app.selected_radio_genre,
-                app.filtered_radio.len()
-            );
+            let title = format!(" Radio: {} ({}) ", app.selected_radio_genre, app.filtered_radio.len());
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
-                .highlight_style(
-                    Style::default()
-                        .bg(Color::Rgb(0, 30, 0))
-                        .fg(Color::Green)
-                        .bold(),
-                );
-            f.render_stateful_widget(list, area, &mut app.r_state);
+                .highlight_style(Style::default().bg(Color::Rgb(0, 30, 0)).fg(Color::Green).bold());
+            f.render_stateful_widget(list, full_area, &mut app.r_state);
         }
 
         Screen::Favorites => {
@@ -368,19 +360,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .iter()
                 .map(|url| {
                     let name = get_name_by_url(url, &app.data.channels, &app.config);
-                    ListItem::new(format!("  ⭐  {}", name))
-                        .style(Style::default().fg(theme))
+                    ListItem::new(format!("  ⭐  {}", name)).style(Style::default().fg(theme))
                 })
                 .collect();
             let list = List::new(items)
                 .block(Block::default().title(" ⭐ Favorites ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
-                .highlight_style(
-                    Style::default()
-                        .bg(theme)
-                        .fg(Color::Black)
-                        .bold(),
-                );
-            f.render_stateful_widget(list, area, &mut app.fav_state);
+                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+            f.render_stateful_widget(list, full_area, &mut app.fav_state);
         }
 
         Screen::History => {
@@ -391,27 +377,21 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .rev()
                 .map(|url| {
                     let name = get_name_by_url(url, &app.data.channels, &app.config);
-                    ListItem::new(format!("  🕐  {}", name))
-                        .style(Style::default().fg(theme))
+                    ListItem::new(format!("  🕐  {}", name)).style(Style::default().fg(theme))
                 })
                 .collect();
             let list = List::new(items)
                 .block(Block::default().title(" 🕐 History ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
-                .highlight_style(
-                    Style::default()
-                        .bg(theme)
-                        .fg(Color::Black)
-                        .bold(),
-                );
-            f.render_stateful_widget(list, area, &mut app.hist_state);
+                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+            f.render_stateful_widget(list, full_area, &mut app.hist_state);
         }
 
         Screen::Settings => {
-            render_settings(f, app, area, None);
+            render_settings(f, app, full_area, None);
         }
 
         Screen::SettingsEdit(field) => {
-            render_settings(f, app, area, Some(*field));
+            render_settings(f, app, full_area, Some(*field));
         }
 
         Screen::LocalList => {
@@ -431,78 +411,320 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let list = List::new(items)
                 .block(Block::default().title(format!(" 📁 Local Playlists — {} ", dir_label)).borders(Borders::ALL).border_style(Style::default().fg(theme)))
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, area, &mut app.d_state);
+            f.render_stateful_widget(list, full_area, &mut app.d_state);
         }
 
         Screen::Detail => {
-            render_detail(f, app, area);
+            render_detail(f, app, full_area);
         }
 
         Screen::AiChat => {
-            render_ai_chat(f, app, area, theme);
+            render_ai_chat(f, app, full_area, theme);
         }
 
         Screen::LinkInput => {
             f.render_widget(
                 Paragraph::new("\n\n  Not yet implemented.\n  Press ESC to return.")
                     .alignment(Alignment::Center),
-                area,
+                full_area,
             );
         }
     }
+}
 
-    // Now Playing bar — shown at the bottom when radio IPC is active
-    if let Some(np) = np_area {
-        render_now_playing(f, app, np, theme);
+// ─── NEON RADIO Full-Screen Player ───────────────────────────────────────────
+
+fn render_radio_player(f: &mut Frame, app: &App, area: Rect) {
+    // Snapshot IPC state — lock once, release before rendering
+    let (paused, muted, volume, media_title, icy_title, bitrate_kbps) = {
+        let st = app.radio_state.lock().unwrap();
+        (st.paused, st.muted, st.volume, st.media_title.clone(), st.icy_title.clone(), st.bitrate_kbps)
+    };
+
+    // Outer neon border
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(NEON_CYAN))
+        .title(Line::from(vec![
+            Span::styled(" ░▒▓", Style::default().fg(NEON_DIM)),
+            Span::styled("█ NEON RADIO █", Style::default().fg(NEON_CYAN).bold()),
+            Span::styled("▓▒░ ", Style::default().fg(NEON_DIM)),
+        ]));
+    f.render_widget(outer.clone(), area);
+    let inner = outer.inner(area);
+
+    // Guard: need at least 12 rows to render meaningfully
+    if inner.height < 12 {
+        f.render_widget(
+            Paragraph::new("Terminal too small").fg(NEON_CYAN).alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+
+    // Layout: header(3) | info(3) | vu(flexible, min 6) | controls(3) | hint(1)
+    let vu_height = inner.height.saturating_sub(3 + 3 + 3 + 1).max(6);
+    let chunks = Layout::default()
+        .constraints([
+            Constraint::Length(3),             // header: status + bitrate
+            Constraint::Length(3),             // station + track marquee
+            Constraint::Length(vu_height),     // VU meters
+            Constraint::Length(3),             // controls + volume slider
+            Constraint::Length(1),             // hint bar
+        ])
+        .split(inner);
+
+    // ── Header ────────────────────────────────────────────────────────────
+    render_radio_header(f, chunks[0], paused, muted, bitrate_kbps);
+
+    // ── Station & Track ───────────────────────────────────────────────────
+    render_radio_info(f, app, chunks[1], &media_title, &icy_title);
+
+    // ── VU Meters ─────────────────────────────────────────────────────────
+    render_vu_meters(f, app, chunks[2]);
+
+    // ── Controls + Volume ─────────────────────────────────────────────────
+    render_radio_controls(f, chunks[3], paused, muted, volume);
+
+    // ── Hint ──────────────────────────────────────────────────────────────
+    f.render_widget(
+        Paragraph::new(
+            " [SPACE] play/pause   [↑↓] volume   [M] mute   [Esc] stop "
+        )
+        .alignment(Alignment::Center)
+        .fg(Color::Rgb(80, 80, 110)),
+        chunks[4],
+    );
+}
+
+fn render_radio_header(f: &mut Frame, area: Rect, paused: bool, muted: bool, bitrate_kbps: u32) {
+    let status_text = if muted {
+        "🔇 MUTED"
+    } else if paused {
+        "⏸ PAUSED"
+    } else {
+        "▶ ON AIR"
+    };
+    let status_color = if paused || muted { Color::DarkGray } else { Color::Rgb(0, 255, 100) };
+
+    let bitrate_str = if bitrate_kbps > 0 {
+        format!("♪ {}kbps", bitrate_kbps)
+    } else {
+        "♪ ---kbps".to_string()
+    };
+
+    // Split header into left (status) and right (bitrate)
+    let hchunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(14)])
+        .split(area);
+
+    f.render_widget(
+        Paragraph::new(format!("  {}", status_text))
+            .fg(status_color)
+            .bold()
+            .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(NEON_DIM))),
+        hchunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(format!("{}  ", bitrate_str))
+            .alignment(Alignment::Right)
+            .fg(NEON_MAGENTA)
+            .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(NEON_DIM))),
+        hchunks[1],
+    );
+}
+
+fn render_radio_info(f: &mut Frame, app: &App, area: Rect, media_title: &str, icy_title: &str) {
+    let inner_w = area.width.saturating_sub(4) as usize;
+
+    // Station name (top row)
+    let station = sanitize(&app.radio_station_title);
+    let station_line = marquee_slice(&station, app.marquee_offset / 2, inner_w); // slower
+
+    // Track (bottom row) — icy-title or media-title
+    let track_raw = if !icy_title.is_empty() {
+        icy_title
+    } else if !media_title.is_empty() {
+        media_title
+    } else {
+        ""
+    };
+    let track = sanitize(track_raw);
+    let track_line = marquee_slice(&track, app.marquee_offset, inner_w);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  STATION: ", Style::default().fg(Color::Rgb(100, 100, 140))),
+            Span::styled(station_line, Style::default().fg(NEON_CYAN).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("  PLAYING: ", Style::default().fg(Color::Rgb(100, 100, 140))),
+            Span::styled(track_line, Style::default().fg(Color::White)),
+        ]),
+    ];
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(NEON_DIM)),
+        ),
+        area,
+    );
+}
+
+fn render_vu_meters(f: &mut Frame, app: &App, area: Rect) {
+    // How many bars fit in the area (each bar is 2 chars wide: symbol + space)
+    let usable_w = area.width.saturating_sub(2) as usize;
+    let n_bars = (usable_w / 2).min(VU_BARS).max(1);
+    let bar_h = area.height.saturating_sub(1) as usize; // 1 line reserved for peak row
+    if bar_h == 0 {
+        return;
+    }
+
+    // Block chars for sub-cell precision (1/8 increments)
+    let block_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+    // Build lines bottom-up: line 0 = top (highest), line bar_h-1 = bottom (lowest)
+    let mut lines: Vec<Line> = Vec::with_capacity(bar_h + 1);
+
+    // Peak row on top
+    let peak_row: Line = {
+        let mut spans = vec![Span::raw(" ")];
+        for i in 0..n_bars {
+            let peak_row_idx = ((1.0 - app.vu_peaks[i]) * bar_h as f32) as usize;
+            // peak_row_idx == 0 means peak is at very top
+            let ch = if peak_row_idx == 0 { '▔' } else { ' ' };
+            spans.push(Span::styled(ch.to_string(), Style::default().fg(NEON_YELLOW)));
+            spans.push(Span::raw(" "));
+        }
+        Line::from(spans)
+    };
+    lines.push(peak_row);
+
+    // Body rows
+    for row in 0..bar_h {
+        // row 0 = top, row bar_h-1 = bottom
+        // threshold: what fraction of bar_h this row represents (from top)
+        let row_threshold = 1.0 - (row as f32 / bar_h as f32);
+
+        let mut spans = vec![Span::raw(" ")];
+        for i in 0..n_bars {
+            let h = app.vu_bars[i]; // 0..1
+
+            let ch = if h >= row_threshold {
+                // Full block in this row
+                '█'
+            } else {
+                let lower = 1.0 - ((row + 1) as f32 / bar_h as f32);
+                // Partial fill for the topmost active cell
+                let frac = (h - lower) / (row_threshold - lower);
+                if frac > 0.0 {
+                    let idx = ((frac * 8.0) as usize).min(7);
+                    block_chars[idx]
+                } else {
+                    ' '
+                }
+            };
+
+            // Color gradient: bottom=cyan, middle=magenta, top=yellow
+            let color = vu_color(row, bar_h);
+            spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+            spans.push(Span::raw(" "));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                .border_style(Style::default().fg(NEON_DIM)),
+        ),
+        area,
+    );
+}
+
+/// VU color gradient by row: top=yellow, mid=magenta, bottom=cyan
+fn vu_color(row: usize, total_rows: usize) -> Color {
+    if total_rows == 0 {
+        return NEON_CYAN;
+    }
+    // row 0 = top, row total_rows-1 = bottom
+    let t = row as f32 / total_rows as f32; // 0=top, 1=bottom
+    if t < 0.25 {
+        // top quarter: yellow → magenta
+        let blend = t / 0.25;
+        lerp_color((255, 220, 0), (255, 0, 200), blend)
+    } else if t < 0.6 {
+        // mid: magenta
+        NEON_MAGENTA
+    } else {
+        // bottom: magenta → cyan
+        let blend = (t - 0.6) / 0.4;
+        lerp_color((255, 0, 200), (0, 255, 229), blend)
     }
 }
 
-// ─── Now Playing Bar (Radio) ─────────────────────────────────────────────────
+fn lerp_color(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    Color::Rgb(
+        (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t) as u8,
+        (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
+        (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
+    )
+}
 
-fn render_now_playing(f: &mut Frame, app: &App, area: Rect, theme: Color) {
-    let st = app.radio_state.lock().unwrap();
+fn render_radio_controls(f: &mut Frame, area: Rect, paused: bool, muted: bool, volume: f64) {
+    // Split into buttons (left) and volume slider (right)
+    let hchunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(26), Constraint::Min(0)])
+        .split(area);
 
-    let status_icon = if st.muted {
-        "🔇"
-    } else if st.paused {
-        "⏸"
-    } else {
-        "▶"
-    };
+    // Buttons row
+    let play_icon = if paused { "▶ " } else { "⏸" };
+    let mute_icon = if muted { "🔇" } else { "🔊" };
+    let btn_text = format!(" ◀◀  {}  ■  {}  ", play_icon, mute_icon);
+    f.render_widget(
+        Paragraph::new(btn_text)
+            .fg(NEON_CYAN)
+            .bold()
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(NEON_DIM)),
+            ),
+        hchunks[0],
+    );
 
-    let track = if !st.icy_title.is_empty() {
-        st.icy_title.clone()
-    } else if !st.media_title.is_empty() {
-        st.media_title.clone()
-    } else {
-        app.radio_station_title.clone()
-    };
+    // Volume slider
+    let vol_w = hchunks[1].width.saturating_sub(12) as usize; // leave room for "VOL " and " XX%"
+    let vol_w = vol_w.max(4);
+    let pct = (volume / 100.0).clamp(0.0, 1.0);
+    let filled = (pct * vol_w as f64) as usize;
 
-    // Volume bar: 20 chars wide
-    let vol_pct = (st.volume / 100.0).clamp(0.0, 1.0);
-    let filled = (vol_pct * 20.0) as usize;
-    let vol_bar: String = (0..20).map(|i| if i < filled { '█' } else { '░' }).collect();
+    // Color the filled portion cyan→magenta based on volume
+    let bar_color = lerp_color((0, 255, 229), (255, 0, 200), pct as f32);
+    let filled_str: String = std::iter::repeat('━').take(filled).collect();
+    let empty_str: String = std::iter::repeat('─').take(vol_w.saturating_sub(filled)).collect();
 
-    let line = Line::from(vec![
-        Span::styled(format!(" {} ", status_icon), Style::default().fg(Color::Green).bold()),
-        Span::styled(&app.radio_station_title, Style::default().fg(theme).bold()),
-        Span::raw("  "),
-        Span::styled(&track, Style::default().fg(Color::White)),
-        Span::raw("  "),
-        Span::styled(format!("Vol [{}] {:.0}%", vol_bar, st.volume), Style::default().fg(Color::Cyan)),
-        Span::styled(
-            "  ↑↓:vol  Space:pause  M:mute  Esc:stop",
-            Style::default().fg(Color::DarkGray),
-        ),
+    let vol_line = Line::from(vec![
+        Span::styled(" VOL ", Style::default().fg(Color::Rgb(100, 100, 140))),
+        Span::styled("●", Style::default().fg(NEON_CYAN)),
+        Span::styled(filled_str, Style::default().fg(bar_color)),
+        Span::styled(empty_str, Style::default().fg(Color::Rgb(40, 40, 60))),
+        Span::styled(format!(" {:.0}%", volume), Style::default().fg(NEON_CYAN).bold()),
     ]);
 
     f.render_widget(
-        Paragraph::new(line).block(
+        Paragraph::new(vol_line).block(
             Block::default()
                 .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().fg(NEON_DIM)),
         ),
-        area,
+        hchunks[1],
     );
 }
 
@@ -519,7 +741,6 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = Color::Rgb(r, g, b);
     let is_fav = app.config.favorites.contains(&ch.url);
 
-    // Layout: header (4 lines) | EPG list (40%) | description (40%) | hint bar
     let chunks = Layout::default()
         .constraints([
             Constraint::Length(4),
@@ -529,7 +750,6 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .split(area);
 
-    // Header: channel name + info
     let fav_marker = if is_fav { " ★" } else { "" };
     let archive_info = if ch.catchup_days > 0 {
         format!("  Archive: {} days", ch.catchup_days)
@@ -553,7 +773,6 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray)));
     f.render_widget(header, chunks[0]);
 
-    // EPG program list
     if app.detail_programs.is_empty() {
         f.render_widget(
             Paragraph::new("  No EPG data available")
@@ -568,18 +787,9 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
             .map(|p| {
                 let is_current = now >= p.start && now < p.stop;
                 let is_past = p.stop <= now;
-
                 let time_str = format_time(p.start);
                 let end_str = format_time(p.stop);
-
-                let marker = if is_current {
-                    "▶ "
-                } else if is_past && ch.catchup_days > 0 {
-                    "⏪"
-                } else {
-                    "  "
-                };
-
+                let marker = if is_current { "▶ " } else if is_past && ch.catchup_days > 0 { "⏪" } else { "  " };
                 let title_style = if is_current {
                     Style::default().fg(Color::Green).bold()
                 } else if is_past {
@@ -587,49 +797,31 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     Style::default().fg(Color::White)
                 };
-
-                let time_style = if is_current {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Cyan)
-                };
-
+                let time_style = if is_current { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Cyan) };
                 let line = Line::from(vec![
-                    Span::styled(format!(" {}", marker), Style::default().fg(if is_current { Color::Green } else if is_past && ch.catchup_days > 0 { Color::Yellow } else { Color::DarkGray })),
+                    Span::styled(format!(" {}", marker), Style::default().fg(
+                        if is_current { Color::Green }
+                        else if is_past && ch.catchup_days > 0 { Color::Yellow }
+                        else { Color::DarkGray }
+                    )),
                     Span::styled(format!("{}-{} ", time_str, end_str), time_style),
                     Span::styled(&p.title, title_style),
                 ]);
-
                 ListItem::new(line)
             })
             .collect();
 
-        let title = if ch.catchup_days > 0 {
-            " Programs (⏪ = archive) ".to_string()
-        } else {
-            " Programs ".to_string()
-        };
-
+        let title = if ch.catchup_days > 0 { " Programs (⏪ = archive) ".to_string() } else { " Programs ".to_string() };
         let list = List::new(items)
             .block(Block::default().title(title).borders(Borders::ALL))
-            .highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(0, 40, 40))
-                    .fg(Color::Cyan)
-                    .bold(),
-            );
+            .highlight_style(Style::default().bg(Color::Rgb(0, 40, 40)).fg(Color::Cyan).bold());
         f.render_stateful_widget(list, chunks[1], &mut app.epg_state);
     }
 
-    // Description of selected program
     let desc_text = if let Some(idx) = app.epg_state.selected() {
         if idx < app.detail_programs.len() {
             let p = &app.detail_programs[idx];
-            if p.desc.is_empty() {
-                p.title.clone()
-            } else {
-                format!("{}\n{}", p.title, p.desc)
-            }
+            if p.desc.is_empty() { p.title.clone() } else { format!("{}\n{}", p.title, p.desc) }
         } else {
             String::new()
         }
@@ -639,16 +831,9 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(
         Paragraph::new(format!(" {}", desc_text))
             .wrap(Wrap { trim: true })
-            .block(
-                Block::default()
-                    .title(" Description ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
-            ),
+            .block(Block::default().title(" Description ").borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray))),
         chunks[2],
     );
-
-    // Hint bar
     f.render_widget(
         Paragraph::new(" Enter: play | L: live | F: fav | ESC: back ").fg(Color::DarkGray),
         chunks[3],
@@ -681,18 +866,15 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
             let val = app.settings_value(i);
             let is_editing = editing == Some(i);
             let display_val = if is_editing { &app.edit_buf } else { &val };
-
             let style = if is_editing {
                 Style::default().fg(Color::Black).bg(Color::Yellow)
             } else {
                 Style::default().fg(Color::White)
             };
-
             let marker = match i {
                 2 | 4 | 5 | 7 | 8 => " [Enter: toggle]",
                 _ => " [Enter: edit]",
             };
-
             ListItem::new(Line::from(vec![
                 Span::styled(format!("  {}: ", label), Style::default().fg(theme).bold()),
                 Span::styled(display_val.to_string(), style),
@@ -703,12 +885,7 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
 
     let list = List::new(items)
         .block(Block::default().title(" ⚙  Settings ").borders(Borders::ALL).border_style(Style::default().fg(theme)))
-        .highlight_style(
-            Style::default()
-                .bg(theme)
-                .fg(Color::Black)
-                .bold(),
-        );
+        .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
     f.render_stateful_widget(list, chunks[0], &mut app.set_state);
 
     let hint = if editing.is_some() {
@@ -720,9 +897,7 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
     };
     f.render_widget(
         Paragraph::new(hint).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
+            Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)),
         ),
         chunks[1],
     );
@@ -735,12 +910,10 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         if focused { Style::default().fg(theme) } else { Style::default().fg(Color::DarkGray) }
     };
 
-    // Split: top = results/content, bottom = chat + input
     let main_chunks = Layout::default()
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    // === TOP HALF: Results list (or empty placeholder) ===
     if app.ai_results.is_empty() {
         let hint = if app.ai_chat_history.is_empty() {
             "  Ask something — results will appear here"
@@ -750,16 +923,10 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         f.render_widget(
             Paragraph::new(hint)
                 .fg(Color::DarkGray)
-                .block(
-                    Block::default()
-                        .title(" Results ")
-                        .borders(Borders::ALL)
-                        .border_style(focus_border(false)),
-                ),
+                .block(Block::default().title(" Results ").borders(Borders::ALL).border_style(focus_border(false))),
             main_chunks[0],
         );
     } else {
-        // Render results list
         let now = Utc::now().timestamp();
         let items: Vec<ListItem> = app.ai_results.iter().map(|r| {
             let mut spans: Vec<Span> = Vec::new();
@@ -798,21 +965,14 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
             .border_style(focus_border(app.ai_focus_results));
         let list = List::new(items)
             .block(results_block)
-            .highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(40, 0, 40))
-                    .fg(Color::Magenta)
-                    .bold(),
-            );
+            .highlight_style(Style::default().bg(Color::Rgb(40, 0, 40)).fg(Color::Magenta).bold());
         f.render_stateful_widget(list, main_chunks[0], &mut app.ai_state);
     }
 
-    // === BOTTOM HALF: Chat history + input ===
     let bottom_chunks = Layout::default()
         .constraints([Constraint::Min(3), Constraint::Length(3), Constraint::Length(1)])
         .split(main_chunks[1]);
 
-    // Chat messages
     let mut chat_lines: Vec<Line> = Vec::new();
     for msg in &app.ai_chat_history {
         if msg.is_user {
@@ -837,7 +997,6 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         )));
     }
 
-    // Auto-scroll: estimate wrapped line count
     let inner_w = bottom_chunks[0].width.saturating_sub(2) as usize;
     let visible_h = bottom_chunks[0].height.saturating_sub(2) as usize;
     let mut wrapped_total = 0usize;
@@ -855,35 +1014,21 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         Paragraph::new(chat_lines)
             .wrap(Wrap { trim: true })
             .scroll((scroll, 0))
-            .block(
-                Block::default()
-                    .title(" Chat ")
-                    .borders(Borders::ALL)
-                    .border_style(focus_border(!app.ai_focus_results)),
-            ),
+            .block(Block::default().title(" Chat ").borders(Borders::ALL).border_style(focus_border(!app.ai_focus_results))),
         bottom_chunks[0],
     );
 
-    // Input line
     let input_border = if app.ai_loading { Color::Yellow } else { theme };
     f.render_widget(
         Paragraph::new(format!(" > {}", app.ai_query))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(input_border)),
-            ),
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(input_border))),
         bottom_chunks[1],
     );
 
-    // Hint bar
     let hint = if app.ai_focus_results {
         " Enter: play | D: details | Tab: chat | ESC: back "
     } else {
         " Enter: send | Tab: results | ESC: back "
     };
-    f.render_widget(
-        Paragraph::new(hint).fg(Color::DarkGray),
-        bottom_chunks[2],
-    );
+    f.render_widget(Paragraph::new(hint).fg(Color::DarkGray), bottom_chunks[2]);
 }
