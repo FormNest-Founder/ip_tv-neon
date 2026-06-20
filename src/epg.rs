@@ -179,12 +179,16 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
 
     if let Ok(r) = client.get(&config.epg_url).send().await {
         if let Ok(b) = r.bytes().await {
-            let reader_raw: Box<dyn BufRead> =
-                if config.epg_url.ends_with(".gz") || b.starts_with(&[0x1f, 0x8b]) {
-                    Box::new(BufReader::new(GzDecoder::new(&b[..])))
-                } else {
-                    Box::new(BufReader::new(&b[..]))
-                };
+            let epg_url_is_gz = config.epg_url.ends_with(".gz");
+            let (parsed_epg, parsed_name_to_id) = tokio::task::spawn_blocking(move || {
+                let mut epg_temp: HashMap<String, Vec<EpgProgram>> = HashMap::new();
+                let mut name_to_id_temp: HashMap<String, String> = HashMap::new();
+                let reader_raw: Box<dyn BufRead> =
+                    if epg_url_is_gz || b.starts_with(&[0x1f, 0x8b]) {
+                        Box::new(BufReader::new(GzDecoder::new(&b[..])))
+                    } else {
+                        Box::new(BufReader::new(&b[..]))
+                    };
             let mut reader = Reader::from_reader(reader_raw);
             reader.config_mut().trim_text(true);
             let mut buf = Vec::new();
@@ -262,7 +266,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                         let text = e.unescape().unwrap_or_default().into_owned();
                         match tag {
                             XmlTag::DisplayName => {
-                                name_to_id.insert(normalize(&text), cur_id.clone());
+                                name_to_id_temp.insert(normalize(&text), cur_id.clone());
                             }
                             XmlTag::Title => {
                                 if let Some(p) = cur_prog.as_mut() {
@@ -280,7 +284,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                     Ok(XmlEvent::End(e)) => match e.name().as_ref() {
                         b"programme" => {
                             if let Some(p) = cur_prog.take() {
-                                epg.entry(cur_id.clone()).or_default().push(p);
+                                epg_temp.entry(cur_id.clone()).or_default().push(p);
                             }
                         }
                         b"title" | b"desc" | b"display-name" => {
@@ -297,6 +301,12 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                 }
                 buf.clear();
             }
+            (epg_temp, name_to_id_temp)
+        })
+        .await
+        .unwrap_or_default();
+        epg = parsed_epg;
+        name_to_id = parsed_name_to_id;
         }
     }
 
@@ -331,7 +341,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
 pub fn save_data(data: AppData) -> Result<()> {
     let path = get_data_bin_path();
     fs::create_dir_all(get_cache_dir())?;
-    let tmp = path.with_extension("tmp");
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     let f = File::create(&tmp)?;
     let writer = BufWriter::new(f);
     bincode::serialize_into(

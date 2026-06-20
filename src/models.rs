@@ -60,12 +60,15 @@ impl Config {
             .unwrap_or_default()
     }
 
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&mut self) -> Result<()> {
+        self.channel_names.retain(|url, _| {
+            self.history.contains(url) || self.favorites.contains(url)
+        });
         use std::io::Write;
         let dir = get_config_dir();
         fs::create_dir_all(&dir)?;
         let path = get_config_json_path();
-        let tmp = path.with_extension("tmp");
+        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
         {
             let mut f = fs::OpenOptions::new()
                 .write(true)

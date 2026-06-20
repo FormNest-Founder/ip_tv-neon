@@ -139,26 +139,33 @@ async fn main() -> Result<()> {
         // ── AI task completion ────────────────────────────────────────────────
         if ai_task.as_ref().is_some_and(|t| t.is_finished()) {
             if let Some(task) = ai_task.take() {
-                if let Ok(response) = task.await {
-                    app.ai.chat_history.push(ai::ChatMsg {
-                        is_user: false,
-                        text: response.text,
-                    });
-                    if let Some(ref kw) = response.keywords {
-                        let now = chrono::Utc::now().timestamp();
-                        app.ai.results = ai::search_epg(&app.data, kw, now);
-                        app.nav.ai_state.select(if app.ai.results.is_empty() {
-                            None
-                        } else {
-                            Some(0)
+                match task.await {
+                    Ok(response) => {
+                        app.ai.chat_history.push(ai::ChatMsg {
+                            is_user: false,
+                            text: response.text,
                         });
-                        if !app.ai.results.is_empty() {
-                            app.ai.focus_results = true;
+                        if let Some(ref kw) = response.keywords {
+                            let now = chrono::Utc::now().timestamp();
+                            app.ai.results = ai::search_epg(&app.data, kw, now);
+                            app.nav.ai_state.select(if app.ai.results.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            if !app.ai.results.is_empty() {
+                                app.ai.focus_results = true;
+                            }
                         }
+                        app.ai.loading = false;
+                        app.ai.chat_scroll = 0;
+                        app.needs_redraw = true;
                     }
-                    app.ai.loading = false;
-                    app.ai.chat_scroll = 0;
-                    app.needs_redraw = true;
+                    Err(e) => {
+                        app.ai.loading = false;
+                        app.status_msg = Some(format!("AI task failed: {}", e));
+                        app.needs_redraw = true;
+                    }
                 }
             }
         }
