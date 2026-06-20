@@ -3,10 +3,11 @@ use std::fs::OpenOptions;
 use std::io::Write;
 
 pub fn main_log(msg: &str) {
+    let log_path = crate::consts::get_cache_dir().join("neon_iptv.log");
     let _ = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/neon_iptv.log")
+        .open(log_path)
         .and_then(|mut f| writeln!(f, "[{}] {}", Utc::now().format("%H:%M:%S"), msg));
 }
 

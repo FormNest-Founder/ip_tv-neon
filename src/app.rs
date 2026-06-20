@@ -9,9 +9,11 @@ use ratatui::widgets::ListState;
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tokio::process::{Child, Command};
+
+
 
 // ─── VU Constants ────────────────────────────────────────────────────────────
 
@@ -386,7 +388,8 @@ impl App {
             .arg("--no-ytdl");
 
         if self.debug {
-            c.arg("--log-file=/tmp/neon_mpv.log");
+            let mpv_log = std::env::temp_dir().join("neon_mpv.log");
+            c.arg(format!("--log-file={}", mpv_log.display()));
             let safe_url = url.split('?').next().unwrap_or("(url)");
             main_log(&format!(
                 "MPV launch: url={} radio={} title={}",
@@ -395,7 +398,10 @@ impl App {
         }
 
         if radio {
-            let sock = format!("/tmp/neon-mpv-{}.sock", std::process::id());
+            let sock = std::env::temp_dir()
+                .join(format!("neon-mpv-{}.sock", std::process::id()))
+                .to_string_lossy()
+                .to_string();
             c.arg("--no-video")
                 .arg("--vo=null")
                 .arg("--force-window=no")
@@ -405,7 +411,8 @@ impl App {
             c.arg("--").arg(url);
             c.stdout(Stdio::null()).stdin(Stdio::null());
             // Redirect stderr to log so failures are visible (not silent)
-            match File::create("/tmp/neon_mpv_stderr.log") {
+            let err_log = std::env::temp_dir().join("neon_mpv_stderr.log");
+            match File::create(err_log) {
                 Ok(f) => {
                     c.stderr(Stdio::from(f));
                 }
@@ -438,7 +445,20 @@ impl App {
         } else {
             c.arg(format!("--title=NEON: {}", display_title))
                 .arg("--ontop")
-                .arg("--force-window=immediate");
+                .arg("--force-window=immediate")
+                // HLS Optimizations
+                .arg("--cache=yes")
+                .arg("--demuxer-max-bytes=1000MiB")
+                .arg("--demuxer-max-back-bytes=500MiB")
+                .arg("--hls-bitrate=max") 
+                .arg("--demuxer-lavf-o=http_persistent=1") 
+                .arg("--network-timeout=10")
+                // FFmpeg & GPU Optimizations (AMD Vega 11)
+                .arg("--hwdec=auto-safe") // Enable FFmpeg VAAPI hardware decoding
+                .arg("--vo=gpu-next") // Modern GPU renderer
+                .arg("--gpu-api=vulkan") // Use Vulkan (RADV) instead of OpenGL
+                .arg("--vd-lavc-threads=4"); // Multi-threading for fallback CPU decoding
+
             if self.config.video_fullscreen {
                 c.arg("--fs");
             } else {

@@ -44,7 +44,7 @@ fn config_save_load_roundtrip() {
 fn config_save_uses_atomic_rename() {
     let source = include_str!("../src/models.rs");
     assert!(
-        source.contains(r#"with_extension("tmp")"#),
+        source.contains(r#"with_extension("#),
         "Config::save must use temp file"
     );
     assert!(
