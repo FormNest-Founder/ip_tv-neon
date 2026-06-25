@@ -282,15 +282,15 @@ async fn main() -> Result<()> {
                                         &app.config.history,
                                         &app.data.channels,
                                     );
-                                    let provider =
-                                        ai::LlmProvider::from_str(&app.config.llm_provider);
+                                    let choice =
+                                        ai::resolve_choice(&app.config.llm_provider);
                                     ai_task = Some(tokio::spawn(async move {
                                         ai::ai_chat(
                                             &client,
                                             &history[..history.len() - 1],
                                             &msg,
                                             &context,
-                                            provider,
+                                            choice,
                                         )
                                         .await
                                     }));
@@ -457,10 +457,16 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     app.status_msg = None;
                     app.screen = Screen::Settings;
                 }
-                9 => app.quit = true,
+                9 => {
+                    app.stop_all();
+                    app.quit = true;
+                }
                 _ => {}
             },
-            KeyCode::Esc => app.quit = true,
+            KeyCode::Esc => {
+                app.stop_all();
+                app.quit = true;
+            }
             _ => {}
         },
 

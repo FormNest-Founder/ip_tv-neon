@@ -11,6 +11,32 @@ pub const RADIO_API: &str = "https://www.radiorecord.ru/api/stations";
 pub const RADIO_NOW_API: &str = "https://www.radiorecord.ru/api/stations/now";
 pub const RECOMMENDED_EPG: &str = "https://epg.one/epg.xml.gz";
 
+// ─── Ingest Hard Caps (CG2 — decompression-bomb / OOM defence) ───────────────
+// The EPG/playlist URLs are user-editable and point at third-party servers, so
+// every byte read from them is bounded before allocation.
+
+/// Max compressed/raw bytes accepted from an EPG download.
+pub const MAX_EPG_DOWNLOAD_BYTES: usize = 128 * 1024 * 1024;
+/// Max bytes fed to the XML parser after gzip decompression. Sized with headroom
+/// over the real default source (epg.one ≈ 417 MB decompressed, 2026-06) so
+/// legitimate data is never truncated; a true bomb is still bounded here.
+pub const MAX_EPG_DECOMPRESSED_BYTES: u64 = 768 * 1024 * 1024;
+/// Max `<programme>` entries kept from one EPG payload.
+pub const MAX_EPG_PROGRAMMES: usize = 4_000_000;
+/// Max distinct channel display-names kept from one EPG payload.
+pub const MAX_EPG_CHANNELS: usize = 200_000;
+/// Max bytes accepted from a remote M3U playlist download.
+pub const MAX_PLAYLIST_BYTES: usize = 64 * 1024 * 1024;
+/// Max channels parsed from one playlist.
+pub const MAX_CHANNELS: usize = 500_000;
+
+// ─── AGY CLI Backend ─────────────────────────────────────────────────────────
+
+/// Wall-clock kill timeout for the agy subprocess (CG3).
+pub const AGY_TIMEOUT_SECS: u64 = 90;
+/// Preferred agy binary location; PATH is used as a fallback.
+pub const AGY_PREFERRED_PATH: &str = "/home/admin/.local/bin/agy";
+
 pub fn get_config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| {

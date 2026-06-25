@@ -160,9 +160,9 @@ fn handle_event(text: &str, state: &SharedRadioState) {
     };
     let data = &v["data"];
 
-    let mut st = state
-        .lock()
-        .expect("radio_state poisoned in handle_mpv_event");
+    // Recover from a poisoned lock instead of panicking — a crash here would
+    // take down the whole TUI (CG6). Matches the recovery in ui.rs.
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     match name {
         "volume" => {
             if let Some(vol) = data.as_f64() {

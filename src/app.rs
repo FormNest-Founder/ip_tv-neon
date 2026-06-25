@@ -9,7 +9,7 @@ use ratatui::widgets::ListState;
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::process::{Child, Command};
 
@@ -112,6 +112,15 @@ pub struct App {
     pub status_msg: Option<String>,
     pub detail: DetailState,
     pub ai: AiState,
+    /// Whether the agy CLI binary was found at startup (drives the Settings hint).
+    pub agy_available: bool,
+}
+
+/// Accept only http/https media URLs (CG4). Case-insensitive on the scheme.
+fn is_http_url(url: &str) -> bool {
+    let u = url.trim_start();
+    let lower = u.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 // ─── Constructor & Data Loading ──────────────────────────────────────────────
@@ -138,6 +147,7 @@ impl App {
             status_msg: None,
             detail: DetailState::default(),
             ai: AiState::default(),
+            agy_available: crate::ai::agy_available(),
         };
         app.nav.m_state.select(Some(0));
         app.nav.cat_state.select(Some(0));
@@ -374,6 +384,15 @@ impl App {
     // ─── MPV Player ──────────────────────────────────────────────────────
 
     pub fn run_mpv(&mut self, url: &str, title: &str, sub_title: &str, radio: bool) {
+        // Protocol whitelist (CG4): only http/https reach mpv. Blocks file://,
+        // edl://, and other local/pseudo protocols a crafted playlist could
+        // inject. Checked BEFORE stop_all so a bad URL never kills playback.
+        if !is_http_url(url) {
+            let scheme = url.split(':').next().unwrap_or("?");
+            main_log(&format!("[security] blocked non-http media URL scheme: {scheme}"));
+            self.status_msg = Some("Blocked: only http/https media URLs are allowed".into());
+            return;
+        }
         self.stop_all();
 
         let display_title = if sub_title.is_empty() {
@@ -611,8 +630,12 @@ impl App {
                     .unwrap_or_else(|| format!("({},{},{})", c.0, c.1, c.2))
             }
             5 => {
-                let p = crate::ai::LlmProvider::from_str(&self.config.llm_provider);
-                p.name().into()
+                let mut label = crate::ai::choice_label(&self.config.llm_provider).to_string();
+                let backend = crate::ai::resolve_choice(&self.config.llm_provider).backend;
+                if backend == crate::ai::Backend::Agy && !self.agy_available {
+                    label.push_str(" (agy not found)");
+                }
+                label
             }
             6 => {
                 if self.config.local_dir.is_empty() {
@@ -663,8 +686,8 @@ impl App {
                 }
             }
             5 => {
-                let cur = crate::ai::LlmProvider::from_str(&self.config.llm_provider);
-                self.config.llm_provider = cur.next().name().to_lowercase().to_string();
+                self.config.llm_provider =
+                    crate::ai::next_choice_id(&self.config.llm_provider).to_string();
                 if let Err(e) = self.config.save() {
                     main_log(&format!("[config] save failed: {e}"));
                 }

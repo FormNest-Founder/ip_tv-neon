@@ -2,7 +2,7 @@
 
 use crate::consts::*;
 use crate::models::{AppData, CacheContainer, Channel, Config, EpgProgram, RadioStation};
-use crate::utils::{main_log, normalize, parse_xml_time};
+use crate::utils::{main_log, normalize, parse_xml_time, sanitize_terminal};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use flate2::read::GzDecoder;
@@ -11,7 +11,7 @@ use quick_xml::reader::Reader;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Read};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -22,6 +22,26 @@ static RE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-name="([^"]
 static RE_GROUP: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"group-title="([^"]+)""#).unwrap());
 static RE_REC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"tvg-rec="(\d+)""#).unwrap());
+
+// ─── Bounded HTTP Body Reader ─────────────────────────────────────────────────
+
+/// Stream an HTTP response body into memory with a hard byte cap (CG2). The
+/// EPG/playlist URLs are user-editable and third-party, so the body is read in
+/// chunks and rejected the moment it would exceed `cap` — no unbounded buffer.
+async fn read_body_capped(mut resp: reqwest::Response, cap: usize, what: &str) -> Result<Vec<u8>> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .with_context(|| format!("{what}: reading body"))?
+    {
+        if buf.len().saturating_add(chunk.len()) > cap {
+            anyhow::bail!("{what}: response exceeds {cap}-byte cap — refusing (possible bomb)");
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
 
 // ─── Data Update (Radio + M3U + EPG) ─────────────────────────────────────────
 
@@ -43,11 +63,9 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                     let mut genres = Vec::new();
                     if let Some(gs) = s["genre"].as_array() {
                         for g in gs {
-                            let g_name = g["name"]
-                                .as_str()
-                                .or(g.as_str())
-                                .unwrap_or("")
-                                .to_uppercase();
+                            let g_name =
+                                sanitize_terminal(g["name"].as_str().or(g.as_str()).unwrap_or(""))
+                                    .to_uppercase();
                             if !g_name.is_empty() {
                                 genres.push(g_name.clone());
                                 radio_genres.insert(g_name);
@@ -76,7 +94,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
 
                     radio.push(RadioStation {
                         id: id_str.clone(),
-                        title: s["title"].as_str().unwrap_or("").into(),
+                        title: sanitize_terminal(s["title"].as_str().unwrap_or("")),
                         // stream_128 is the real 128 kbps max; stream_320 label
                         // is misleading — radio-record.ru serves only 96 kbps on it.
                         stream: s["stream_128"]
@@ -99,13 +117,13 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
     r_groups.sort();
 
     let m3u = if config.playlist_url.starts_with("http") {
-        client
+        let resp = client
             .get(&config.playlist_url)
             .send()
-            .await?
-            .text()
             .await
-            .context("Failed to fetch playlist")?
+            .context("Failed to fetch playlist")?;
+        let bytes = read_body_capped(resp, MAX_PLAYLIST_BYTES, "playlist").await?;
+        String::from_utf8_lossy(&bytes).into_owned()
     } else {
         let path = config.playlist_url.clone();
         tokio::task::spawn_blocking(move || fs::read_to_string(&path))
@@ -121,7 +139,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
     for line in m3u.lines() {
         let line = line.trim();
         if line.starts_with("#EXTGRP:") {
-            let g = line.trim_start_matches("#EXTGRP:").trim().to_string();
+            let g = sanitize_terminal(line.trim_start_matches("#EXTGRP:").trim());
             if !g.is_empty() {
                 // EXTGRP can appear before or after EXTINF — apply to last channel if pending
                 if let Some(ch) = channels.last_mut() {
@@ -135,7 +153,10 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                 pending_grp = Some(g);
             }
         } else if line.starts_with("#EXTINF:") {
-            if let Some(g) = RE_GROUP.captures(line).map(|c| c[1].to_string()) {
+            if channels.len() >= MAX_CHANNELS {
+                continue; // hard cap on channel count (CG2)
+            }
+            if let Some(g) = RE_GROUP.captures(line).map(|c| sanitize_terminal(&c[1])) {
                 cur_grp = g;
             }
             if let Some(g) = pending_grp.take() {
@@ -148,7 +169,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                 .captures(line)
                 .and_then(|c| c[1].parse().ok())
                 .unwrap_or(0);
-            let name = line.rsplit(",").next().unwrap_or("").trim().to_string();
+            let name = sanitize_terminal(line.rsplit(",").next().unwrap_or("").trim());
             channels.push(Channel {
                 name_lower: name.to_lowercase(),
                 name,
@@ -174,140 +195,21 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
 
     let mut epg: HashMap<String, Vec<EpgProgram>> = HashMap::new();
     let mut name_to_id: HashMap<String, String> = HashMap::new();
-    let now = Utc::now().timestamp();
-    let limit = now - 86400;
 
-    if let Ok(r) = client.get(&config.epg_url).send().await {
-        if let Ok(b) = r.bytes().await {
-            let epg_url_is_gz = config.epg_url.ends_with(".gz");
-            let (parsed_epg, parsed_name_to_id) = tokio::task::spawn_blocking(move || {
-                let mut epg_temp: HashMap<String, Vec<EpgProgram>> = HashMap::new();
-                let mut name_to_id_temp: HashMap<String, String> = HashMap::new();
-                let reader_raw: Box<dyn BufRead> =
-                    if epg_url_is_gz || b.starts_with(&[0x1f, 0x8b]) {
-                        Box::new(BufReader::new(GzDecoder::new(&b[..])))
-                    } else {
-                        Box::new(BufReader::new(&b[..]))
-                    };
-            let mut reader = Reader::from_reader(reader_raw);
-            reader.config_mut().trim_text(true);
-            let mut buf = Vec::new();
-            let mut cur_id = String::new();
-            let mut cur_prog: Option<EpgProgram> = None;
-
-            #[derive(PartialEq)]
-            enum XmlTag {
-                None,
-                Title,
-                Desc,
-                DisplayName,
+    match client.get(&config.epg_url).send().await {
+        Ok(r) => match read_body_capped(r, MAX_EPG_DOWNLOAD_BYTES, "EPG").await {
+            Ok(b) => {
+                let epg_url_is_gz = config.epg_url.ends_with(".gz");
+                let (parsed_epg, parsed_name_to_id) =
+                    tokio::task::spawn_blocking(move || parse_epg(&b, epg_url_is_gz))
+                        .await
+                        .unwrap_or_default();
+                epg = parsed_epg;
+                name_to_id = parsed_name_to_id;
             }
-            let mut tag = XmlTag::None;
-
-            loop {
-                match reader.read_event_into(&mut buf) {
-                    Ok(XmlEvent::Start(e)) => {
-                        match e.name().as_ref() {
-                            b"channel" => {
-                                cur_id = e
-                                    .attributes()
-                                    .flatten()
-                                    .find(|a| a.key.as_ref() == b"id")
-                                    .map(|a| String::from_utf8_lossy(&a.value).to_string())
-                                    .unwrap_or_default();
-                                tag = XmlTag::None;
-                            }
-                            b"display-name" => {
-                                tag = XmlTag::DisplayName;
-                            }
-                            b"programme" => {
-                                let mut start = 0i64;
-                                let mut stop = 0i64;
-                                let mut ch_id = String::new();
-                                for attr in e.attributes().flatten() {
-                                    match attr.key.as_ref() {
-                                        b"start" => {
-                                            start = parse_xml_time(&String::from_utf8_lossy(
-                                                &attr.value,
-                                            ))
-                                        }
-                                        b"stop" => {
-                                            stop = parse_xml_time(&String::from_utf8_lossy(
-                                                &attr.value,
-                                            ))
-                                        }
-                                        b"channel" => {
-                                            ch_id = String::from_utf8_lossy(&attr.value).to_string()
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                if stop > limit {
-                                    cur_prog = Some(EpgProgram {
-                                        start,
-                                        stop,
-                                        title: String::new(),
-                                        desc: String::new(),
-                                    });
-                                    cur_id = ch_id;
-                                }
-                                tag = XmlTag::None;
-                            }
-                            b"title" => {
-                                tag = XmlTag::Title;
-                            }
-                            b"desc" => {
-                                tag = XmlTag::Desc;
-                            }
-                            _ => {} // unknown inner tags — don't overwrite current tag
-                        }
-                    }
-                    Ok(XmlEvent::Text(e)) => {
-                        let text = e.unescape().unwrap_or_default().into_owned();
-                        match tag {
-                            XmlTag::DisplayName => {
-                                name_to_id_temp.insert(normalize(&text), cur_id.clone());
-                            }
-                            XmlTag::Title => {
-                                if let Some(p) = cur_prog.as_mut() {
-                                    p.title = text;
-                                }
-                            }
-                            XmlTag::Desc => {
-                                if let Some(p) = cur_prog.as_mut() {
-                                    p.desc = text;
-                                }
-                            }
-                            XmlTag::None => {}
-                        }
-                    }
-                    Ok(XmlEvent::End(e)) => match e.name().as_ref() {
-                        b"programme" => {
-                            if let Some(p) = cur_prog.take() {
-                                epg_temp.entry(cur_id.clone()).or_default().push(p);
-                            }
-                        }
-                        b"title" | b"desc" | b"display-name" => {
-                            tag = XmlTag::None;
-                        }
-                        _ => {}
-                    },
-                    Ok(XmlEvent::Eof) => break,
-                    Err(e) => {
-                        main_log(&format!("EPG XML parse error: {}", e));
-                        break;
-                    }
-                    _ => {}
-                }
-                buf.clear();
-            }
-            (epg_temp, name_to_id_temp)
-        })
-        .await
-        .unwrap_or_default();
-        epg = parsed_epg;
-        name_to_id = parsed_name_to_id;
-        }
+            Err(e) => main_log(&format!("[epg] download rejected: {e}")),
+        },
+        Err(e) => main_log(&format!("[epg] fetch failed: {e}")),
     }
 
     for progs in epg.values_mut() {
@@ -334,6 +236,158 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
 
     save_data(data)?;
     Ok(())
+}
+
+// ─── EPG XMLTV Parser ─────────────────────────────────────────────────────────
+
+/// Parse an XMLTV EPG payload (optionally gzip-compressed) into
+/// (programmes-by-channel, normalized-display-name → channel-id).
+///
+/// Hardened against decompression bombs (CG2): the decompressed input fed to the
+/// parser is capped at `MAX_EPG_DECOMPRESSED_BYTES`, the programme count at
+/// `MAX_EPG_PROGRAMMES`, and the channel map at `MAX_EPG_CHANNELS`. Hitting the
+/// programme cap logs loudly and stops parsing (CG5). Untrusted title/desc text
+/// is sanitized at this parse boundary so every render site is safe (CG8).
+fn parse_epg(
+    b: &[u8],
+    is_gz: bool,
+) -> (HashMap<String, Vec<EpgProgram>>, HashMap<String, String>) {
+    let mut epg_temp: HashMap<String, Vec<EpgProgram>> = HashMap::new();
+    let mut name_to_id_temp: HashMap<String, String> = HashMap::new();
+    let now = Utc::now().timestamp();
+    let limit = now - 86400;
+
+    let inner: Box<dyn Read + '_> = if is_gz || b.starts_with(&[0x1f, 0x8b]) {
+        Box::new(GzDecoder::new(b))
+    } else {
+        Box::new(b)
+    };
+    let mut take = inner.take(MAX_EPG_DECOMPRESSED_BYTES);
+    let mut reader = Reader::from_reader(BufReader::new(&mut take));
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut cur_id = String::new();
+    let mut cur_prog: Option<EpgProgram> = None;
+    let mut programme_count = 0usize;
+
+    #[derive(PartialEq)]
+    enum XmlTag {
+        None,
+        Title,
+        Desc,
+        DisplayName,
+    }
+    let mut tag = XmlTag::None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(e)) => match e.name().as_ref() {
+                b"channel" => {
+                    cur_id = e
+                        .attributes()
+                        .flatten()
+                        .find(|a| a.key.as_ref() == b"id")
+                        .map(|a| String::from_utf8_lossy(&a.value).to_string())
+                        .unwrap_or_default();
+                    tag = XmlTag::None;
+                }
+                b"display-name" => {
+                    tag = XmlTag::DisplayName;
+                }
+                b"programme" => {
+                    let mut start = 0i64;
+                    let mut stop = 0i64;
+                    let mut ch_id = String::new();
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"start" => {
+                                start = parse_xml_time(&String::from_utf8_lossy(&attr.value))
+                            }
+                            b"stop" => {
+                                stop = parse_xml_time(&String::from_utf8_lossy(&attr.value))
+                            }
+                            b"channel" => {
+                                ch_id = String::from_utf8_lossy(&attr.value).to_string()
+                            }
+                            _ => {}
+                        }
+                    }
+                    if stop > limit {
+                        cur_prog = Some(EpgProgram {
+                            start,
+                            stop,
+                            title: String::new(),
+                            desc: String::new(),
+                        });
+                        cur_id = ch_id;
+                    }
+                    tag = XmlTag::None;
+                }
+                b"title" => {
+                    tag = XmlTag::Title;
+                }
+                b"desc" => {
+                    tag = XmlTag::Desc;
+                }
+                _ => {} // unknown inner tags — don't overwrite current tag
+            },
+            Ok(XmlEvent::Text(e)) => {
+                let text = e.unescape().unwrap_or_default().into_owned();
+                match tag {
+                    XmlTag::DisplayName => {
+                        if name_to_id_temp.len() < MAX_EPG_CHANNELS {
+                            name_to_id_temp.insert(normalize(&text), cur_id.clone());
+                        }
+                    }
+                    XmlTag::Title => {
+                        if let Some(p) = cur_prog.as_mut() {
+                            p.title = sanitize_terminal(&text);
+                        }
+                    }
+                    XmlTag::Desc => {
+                        if let Some(p) = cur_prog.as_mut() {
+                            p.desc = sanitize_terminal(&text);
+                        }
+                    }
+                    XmlTag::None => {}
+                }
+            }
+            Ok(XmlEvent::End(e)) => match e.name().as_ref() {
+                b"programme" => {
+                    if let Some(p) = cur_prog.take() {
+                        epg_temp.entry(cur_id.clone()).or_default().push(p);
+                        programme_count += 1;
+                        if programme_count >= MAX_EPG_PROGRAMMES {
+                            main_log(&format!(
+                                "[epg] programme cap {MAX_EPG_PROGRAMMES} reached — truncating (possible bomb)"
+                            ));
+                            break;
+                        }
+                    }
+                }
+                b"title" | b"desc" | b"display-name" => {
+                    tag = XmlTag::None;
+                }
+                _ => {}
+            },
+            Ok(XmlEvent::Eof) => break,
+            Err(e) => {
+                main_log(&format!("EPG XML parse error: {}", e));
+                break;
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    drop(reader);
+    // Loud truncation signal (CG5): a fully-consumed byte cap means the EPG was
+    // cut short rather than reaching EOF, so the caller knows data is missing.
+    if take.limit() == 0 {
+        main_log(&format!(
+            "[epg] decompressed-size cap {MAX_EPG_DECOMPRESSED_BYTES} reached — EPG truncated (possible bomb)"
+        ));
+    }
+    (epg_temp, name_to_id_temp)
 }
 
 // ─── Cache Persistence ───────────────────────────────────────────────────────
@@ -401,7 +455,7 @@ pub async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String
                     let artist = s["track"]["artist"].as_str().unwrap_or("");
                     let song = s["track"]["song"].as_str().unwrap_or("");
                     if !artist.is_empty() {
-                        map.insert(id, format!("{} - {}", artist, song));
+                        map.insert(id, sanitize_terminal(&format!("{} - {}", artist, song)));
                     }
                 }
             }

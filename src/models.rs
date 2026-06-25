@@ -4,6 +4,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Process-local counter guaranteeing each temp file name is unique even when
+/// two saves land within the same wall-clock tick (CG1).
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
@@ -23,6 +28,10 @@ pub struct Config {
     pub video_geometry: String,
     #[serde(default)]
     pub local_dir: String,
+    /// Selected AI model: a `MODEL_CATALOG` id token (e.g. "deepseek",
+    /// "gemini", "agy:claude-opus-4-6"). Resolved via `ai::resolve_choice`,
+    /// which migrates legacy values and never panics. Stored as `String` so the
+    /// serde_json config schema is unchanged (no cache/bincode bump needed).
     #[serde(default)]
     pub llm_provider: String,
 }
@@ -68,7 +77,8 @@ impl Config {
         let dir = get_config_dir();
         fs::create_dir_all(&dir)?;
         let path = get_config_json_path();
-        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_extension(format!("tmp.{}.{}", std::process::id(), seq));
         {
             let mut f = fs::OpenOptions::new()
                 .write(true)

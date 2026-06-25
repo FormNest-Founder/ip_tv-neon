@@ -3,6 +3,7 @@
 use crate::app::{App, VU_BARS};
 use crate::epg::get_current_epg;
 use crate::models::{Channel, Screen, SETTINGS_COUNT, SETTINGS_LABELS};
+use crate::utils::sanitize_terminal as sanitize;
 use chrono::Utc;
 use ratatui::{prelude::*, widgets::*};
 
@@ -31,13 +32,6 @@ pub fn get_name_by_url<'a>(
         return ch.name.as_str();
     }
     config.channel_name(url)
-}
-
-/// Replace control characters with spaces so terminal doesn't get garbage.
-fn sanitize(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
 }
 
 /// Return a `width`-char window of `text` starting at `offset`, with looping via
@@ -878,10 +872,13 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
 
 /// Build the composite marquee text: "Station │ Artist │ Track"
 /// Skips empty segments and joins remaining ones with " │ ".
+/// `artist`/`track` arrive already sanitized; `station` and `media_title` are
+/// sanitized here so untrusted stream/playlist metadata can't reach the TTY (CG8).
 fn build_marquee_text(station: &str, artist: &str, track: &str, media_title: &str) -> String {
+    let station = sanitize(station);
     // If we have structured metadata — build rich format
     if !track.is_empty() {
-        let mut parts: Vec<&str> = vec![station];
+        let mut parts: Vec<&str> = vec![station.as_str()];
         if !artist.is_empty() {
             parts.push(artist);
         }
@@ -890,10 +887,10 @@ fn build_marquee_text(station: &str, artist: &str, track: &str, media_title: &st
     }
     // Fall back to media_title (mpv's best guess)
     if !media_title.is_empty() {
-        return format!("{} │ {}", station, media_title);
+        return format!("{} │ {}", station, sanitize(media_title));
     }
     // Nothing — just station name (marquee will scroll if long)
-    station.to_string()
+    station
 }
 
 /// Return a hint string that fits into `width` terminal columns.
