@@ -286,11 +286,14 @@ const DEFAULT_PROMPT: &str = "\
 ПРАВИЛА:
 1. Отвечай ТОЛЬКО на русском, кратко (2-4 предложения).
 2. ВСЕГДА добавляй KEYWORDS когда пользователь ищет, просит подборку или рекомендацию.
-3. Формат последней строки: KEYWORDS: слово1, слово2, слово3, слово4, слово5
-   - Для жанровых запросов: ключевые слова жанра + 5-10 известных названий фильмов этого жанра.
-   - Для конкретных запросов: названия фильмов (русские И оригинальные).
-   - Чем БОЛЬШЕ keywords — тем лучше поиск. Давай 5-15 штук.
-4. НЕ используй слишком общие слова (фильм, сериал, кино, лучший, канал, рейтинг).
+3. Формат последней строки: KEYWORDS: название1, название2, название3
+   - Давай КОНКРЕТНЫЕ узнаваемые НАЗВАНИЯ фильмов и сериалов (русские И оригинальные) —
+     именно они дают точные совпадения по заголовкам программ.
+   - Для жанровых запросов подбери 6-10 ИЗВЕСТНЫХ названий этого жанра, а НЕ общие слова жанра.
+   - Держись в пределах 6-10 точных ключевых слов. Меньше точных названий ЛУЧШЕ, чем много общих слов.
+4. НЕ используй слишком общие или широкие одиночные слова (фильм, сериал, кино, лучший, канал,
+   рейтинг, страшный, хороший). Широкие слова дают НЕРЕЛЕВАНТНЫЕ совпадения по случайным
+   подстрокам в описаниях — предпочитай точные названия.
 5. Если пользователь просто общается (не ищет контент) — НЕ добавляй KEYWORDS.
 6. Учитывай HISTORY для персональных рекомендаций.
 7. NOW_PLAYING — справка о текущем эфире. Используй для ответов 'что сейчас идёт'.
@@ -686,6 +689,33 @@ const STOP_WORDS: &[&str] = &[
 
 // ─── EPG Search ──────────────────────────────────────────────────────────────
 
+/// Whole-word (Unicode-aware) containment: `true` only when `needle` occurs in
+/// `haystack` bounded on both sides by a non-alphanumeric char or a string edge.
+/// Both inputs are expected already lowercased. This replaces raw `contains` so a
+/// short keyword like "оно" matches the standalone word/title "Оно" but never the
+/// incidental substring inside "регионов"/"законом" — the cause of the relevance
+/// bug. Phrase keywords ("изгоняющий дьявола") match as a bounded phrase.
+fn word_contains(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    for (idx, _) in haystack.match_indices(needle) {
+        let before_ok = haystack[..idx]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        let after = idx + needle.len();
+        let after_ok = haystack[after..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
 /// Search EPG across all channels using keywords
 pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearchResult> {
     let kw_lower: Vec<String> = keywords.iter().map(|k| k.to_lowercase()).collect();
@@ -707,17 +737,24 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
 
                     let title_hits: u32 = kw_lower
                         .iter()
-                        .filter(|kw| title_lower.contains(kw.as_str()))
+                        .filter(|kw| word_contains(&title_lower, kw))
                         .count() as u32;
                     let desc_hits: u32 = kw_lower
                         .iter()
                         .filter(|kw| {
-                            !title_lower.contains(kw.as_str()) && desc_lower.contains(kw.as_str())
+                            !word_contains(&title_lower, kw) && word_contains(&desc_lower, kw)
                         })
                         .count() as u32;
-                    let score = title_hits * 2 + desc_hits;
 
-                    if score >= 1 {
+                    // Precision gate: a title keyword is a strong signal; a lone
+                    // generic word in the description is not. Require a title hit
+                    // OR ≥2 distinct description keywords, so an incidental single
+                    // desc word no longer pulls in unrelated programmes. Title is
+                    // weighted above desc so title matches always sort first.
+                    let qualifies = title_hits >= 1 || desc_hits >= 2;
+                    let score = title_hits * 3 + desc_hits;
+
+                    if qualifies {
                         has_epg_match = true;
                         results.push(AiSearchResult {
                             channel_idx: ch_idx,
@@ -733,9 +770,15 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
         }
 
         if !has_epg_match {
+            // Fallback for channels with no EPG: surface them only on a distinctive
+            // whole-word name hit. Short tokens (<4 chars) are excluded so a film
+            // title like "Оно" can't drag in a channel, and word-boundary matching
+            // stops substring collisions. (In the reported incident this fallback
+            // never fired — every junk result came through the EPG path — so it is
+            // hardened rather than removed, preserving "find a channel by name".)
             let name_score: u32 = kw_lower
                 .iter()
-                .filter(|kw| ch.name_lower.contains(kw.as_str()))
+                .filter(|kw| kw.chars().count() >= 4 && word_contains(&ch.name_lower, kw))
                 .count() as u32;
 
             if name_score > 0 {
