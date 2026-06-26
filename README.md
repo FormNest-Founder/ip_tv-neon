@@ -1,102 +1,99 @@
-# NEON IPTV — The Only Terminal IPTV Player with a Built-in AI Brain
+# NEON-IPTV — Terminal IPTV/TV player with a built-in AI brain
 
-**Ask your TV "what comedies are on tonight?" and get results you can play with one keypress.**
+**Ask your TV "what comedies are on tonight?" and get a list you can play with one keypress.**
 
-NEON IPTV is a 2700-line Rust TUI that combines an IPTV/Radio player with a live LLM assistant. The AI sees your full EPG (thousands of programs across hundreds of channels), understands your viewing history, and finds exactly what you want — in natural language, in under 2 seconds.
+NEON-IPTV is a [ratatui](https://ratatui.rs/) terminal application that turns your shell into a full IPTV/TV
+hub: a channel browser with live EPG, an electronic programme grid, a radio player with VU meters, and a built-in
+LLM assistant that reads your whole EPG and finds exactly what you want — in natural language. Playback runs in
+[mpv](https://mpv.io/), driven over a JSON IPC socket; the TUI never blocks while you watch or listen.
 
-No Electron. No browser. No 500MB RAM for a channel list. Just a 4.3MB static binary, 15MB RSS, and mpv doing what mpv does best.
+No Electron, no browser, no embedded video widget. A single Rust binary, your own mpv, and a binary cache so
+startup is instant.
 
 ![Main Menu](screenshots/main.png)
 
-## What the AI Actually Does
+---
 
-This isn't a chatbot bolted onto a player. The LLM is wired into the EPG search engine:
+## What it is
 
-1. **You ask** — "horror movies tonight", "что идёт на спортивных каналах", "podborka multfilmov"
-2. **AI analyzes** — sees live EPG across all channels + your viewing history, generates targeted search keywords
-3. **Search engine fires** — TF-IDF scoring across every program title and description, live results ranked first
-4. **You play** — select any result, hit Enter. Live stream, archive, or timeshift — one keypress
+NEON-IPTV bundles four things behind one neon TUI:
 
-![AI Chat — natural language search across all channels](screenshots/ai_chat.png)
+- **IPTV / TV** — M3U/M3U8 playlists grouped into categories, each channel showing its current programme with a
+  live progress bar; a detail screen with the full schedule and archive/timeshift playback.
+- **EPG** — XMLTV (optionally gzip-compressed) ingested into a per-channel programme list, matched to channels by
+  `tvg-id` first, then by normalized display name.
+- **AI assistant** — a chat panel wired into the EPG search engine. It recommends what to watch, answers
+  "what's on now?", and emits keywords the player uses to search every programme title and description across
+  every channel.
+- **Radio** — Radio Record stations by genre, with live "now playing" track info, an animated AIMP-style VU
+  meter, a marquee, and a volume slider — all while the channel list above stays navigable.
 
-Supports two LLM providers — **DeepSeek V3** (~$0.001/query) and **Google Gemini 2.5 Flash** (free tier available). Switch between them in Settings with one keypress. Without an API key, everything else works normally.
-
-## Why Rust + mpv
-
-- **4.3MB binary, 15MB RSS** — cold start under 100ms. Binary cache (bincode) means zero re-parsing on launch
-- **mpv as the player** — not a built-in video widget. Your system mpv with your configs, your shaders (`CAS`, `FSR`), your `vaapi`/`vulkan` hwdec. The app manages mpv as an async child process and gets out of the way
-- **Fully async** — tokio runtime: HTTP fetches, mpv lifecycle, radio track info, AI chat — nothing blocks the UI
-- **Terminal-native** — runs over SSH, in tmux, on a headless server driving a TV
-
-## Screenshots
-
-### Channel Browser — live EPG with progress bars
-![Channels](screenshots/channels.png)
-
-### Detail Screen — full schedule with archive playback
-![Detail](screenshots/detail.png)
-
-### Radio — 100+ stations with live track info
-![Radio](screenshots/radio.png)
+---
 
 ## Features
 
-### IPTV
-- **Channel browser** — categories with contextual icons (country flags, content type icons) and channel counts
-- **EPG integration** — current program with live progress bar (gradient green → yellow → red)
-- **TimeShift / Archive** — playback past programs via catchup URLs (`tvg-rec` days auto-detection)
-- **Channel markers** — `★` favorites, `⏪` archive-capable channels
-- **Detail screen** — full EPG schedule with times, descriptions, current program highlight
-- **Theme-consistent UI** — accent color applied to category browser, favorites, history, settings, local playlists
+### IPTV / TV
+- **Channel browser** — categories with contextual icons (~40 country flags + content-type icons) and channel counts.
+- **Live EPG inline** — current programme with a gradient progress bar (green → yellow → red) next to each channel.
+- **Detail / EPG screen** — full schedule with start/end times, per-programme description, current-programme highlight.
+- **TimeShift / archive** — replay past programmes through catchup URLs (`?utc=…&lutc=…`), auto-enabled from the
+  `tvg-rec` attribute. Archive-capable channels are marked `⏪`.
+- **Favorites & history** — `★` favorites toggled with `f`; the last 200 watched streams, deduplicated.
+- **Real-time search** — type to filter the channel list; falls back to a global search if the current category
+  has no match.
+- **7 color themes** — Cyan, Magenta, Neon Green, Orange, Purple, Yellow, Red.
+
+### EPG ingest
+- XMLTV parser built on `quick-xml` (enum state machine, no per-event String allocations in the hot path).
+- Transparent gzip (`.xml.gz`) decompression via `flate2`.
+- Hardened against decompression bombs and OOM with hard byte/entry caps (see [Resource bounds](#resource-bounds)).
+- Untrusted title/description text is terminal-sanitized at the parse boundary, so no crafted EPG entry can inject
+  ANSI/control sequences into your terminal.
+
+### AI assistant
+- Chat panel that feeds the current EPG (what's on now across channels) plus your viewing history to an LLM.
+- The model replies in natural language and appends a `KEYWORDS: …` line; the player runs a **genre-aware,
+  word-boundary** EPG search and ranks results **live → score → start time**.
+- Split-screen UI: search results on top, chat at the bottom; jump between them with `Tab`.
+- **Multi-backend model catalog** — DeepSeek and Gemini over their HTTP APIs, plus five keyless backends served
+  through the local `agy` CLI (Gemini 3.5 Flash / 3.1 Pro, Claude Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B).
+  See [The AI assistant](#the-ai-assistant).
+- **Customizable prompt** — drop a `~/.config/neon-iptv/ai_prompt.md` to retune behavior (including a personal
+  taste profile) without rebuilding. A fixed anti-injection role preamble is always prepended and cannot be
+  overridden by the file or by any host environment.
 
 ### Radio
-- **Radio Record** stations with genre categories and contextual icons
-- **Now Playing** — async track info fetch (artist — song), non-blocking
-- Background playback — TUI stays interactive while radio plays
+- Radio Record stations grouped by genre with contextual icons.
+- Async "now playing" (artist – track) fetched without blocking the UI.
+- Compact neon player panel: animated VU meters (20 FPS), marquee of `Station │ Artist │ Track`, live bitrate,
+  and a volume slider — driven over mpv IPC.
+- Background playback: the station list stays interactive while audio plays; `↑↓ Enter` switch stations live.
 
-### AI Chat (optional)
-- Smart TV assistant powered by **DeepSeek V3** or **Google Gemini 2.5 Flash** (switchable in Settings)
-- **Context-aware**: feeds current EPG across channels + your viewing history to the LLM
-- Auto-extracts keywords from AI response and searches EPG in real-time
-- **Customizable system prompt** — edit `~/.config/neon-iptv/ai_prompt.md` to tune AI behavior without rebuilding
-- Split-screen UI: search results (top) + chat (bottom)
-- Cost: ~$0.001 per query (DeepSeek V3) / free tier available (Gemini)
-
-### Video Playback
-- **mpv** as an external player — your config, your shaders, your hwdec
-- Async process management via `tokio::process` with 12h timeout
-- Fullscreen or windowed mode (configurable geometry)
-- Suspended mode: TUI hides during video, auto-restores after mpv exits
-- Radio: mpv runs in background (`--no-video`), TUI stays interactive
+### Playback
+- **mpv as the player** — your install, your config, your shaders and hwdec. The app spawns mpv as an async child
+  and gets out of the way.
+- TV streams open in an mpv window with HLS cache tuning and AMD VAAPI/Vulkan hwdec flags; radio runs windowless
+  (`--no-video`) under an IPC socket.
+- **Protocol whitelist** — only `http://` / `https://` media URLs ever reach mpv; `file://`, `edl://` and other
+  pseudo-protocols a crafted playlist might inject are blocked before playback starts.
+- **Panic hook** — the terminal (raw mode, alternate screen) is always restored, even on a crash.
 
 ### Performance
-- **4.3MB** fat LTO binary (Clang + LLD, target-cpu optimized, codegen-units=1, strip=symbols)
-- **~15MB RSS** — no Electron, no WebView, no garbage collector
-- **Instant startup** — versioned binary cache (bincode), no re-parsing on launch
-- **Non-blocking I/O** — async everything: HTTP fetches, mpv management, track info, AI chat, data updates
-- **Zero-copy XML parsing** — EPG parsed with `quick-xml` enum-based state machine, no String allocations in hot path
+- Single Rust binary (~8 MB release build), low RSS, no GC, no WebView.
+- Versioned **bincode** cache (`data.bin`) — channels/EPG/radio are deserialized on launch instead of re-parsed.
+- Fully async on `tokio`: HTTP fetches, mpv lifecycle, radio metadata, AI chat and data updates never block the UI.
 
-### Other
-- **Favorites** — persistent set, toggle with `f`
-- **History** — last 200 watched streams (deduplicated)
-- **Local playlists** — scans configurable directory (or default `~/`, `~/Downloads/`, `~/Videos/`) for `.m3u`/`.m3u8` files
-- **7 color themes** — Cyan, Magenta, Neon Green, Orange, Purple, Yellow, Red
-- **Contextual icons** — ~40 country flags for IPTV categories, ~25 genre icons for radio
-- **Panic hook** — terminal is always restored on crash
-- **Diagnostics** — `ip_tv diag` shows all paths, URLs, cache state
+---
 
-## Requirements
+## Install & run
 
-- **Linux** (tested on Arch/CachyOS)
-- **mpv** — media player (`pacman -S mpv` / `apt install mpv`)
-- **Rust toolchain** — for building from source
-- **niri** (optional) — Wayland compositor for suspended video mode. Without niri, video plays without TUI hiding
-- **DeepSeek API key** (optional) — for AI Chat with DeepSeek provider
-- **Gemini API key** (optional) — for AI Chat with Google Gemini provider
+### Requirements
+- **Linux** (developed on Arch/CachyOS).
+- **mpv** — `pacman -S mpv` / `apt install mpv`.
+- **Rust toolchain** — to build from source.
+- *(optional)* a **DeepSeek** or **Gemini** API key for those backends, or the **`agy`** CLI for the keyless AGY backends.
 
-## Installation
-
-### Build from source
+### Build
 
 ```bash
 git clone https://github.com/FormNest-Founder/ip_tv-neon.git
@@ -104,144 +101,275 @@ cd ip_tv-neon
 cargo build --release
 ```
 
-### Install binary
+### Install the binary
 
 ```bash
-# Copy to a directory in your $PATH
-cp target/release/ip_tv-neon ~/.local/bin/ip_tv
-
-# Or install via cargo
-cargo install --path .
+cp target/release/ip_tv-neon ~/.local/bin/
+# (optional) shorten the command:
+#   ln -s ~/.local/bin/ip_tv-neon ~/.local/bin/ip_tv
 ```
 
-### Verify
+### Commands
 
 ```bash
-ip_tv diag
+ip_tv-neon           # launch the TUI
+ip_tv-neon update    # refresh playlist + EPG + radio without opening the TUI
+ip_tv-neon diag      # print config/cache paths, URLs and cache state
+ip_tv-neon --debug   # launch with extra mpv/app logging
 ```
 
-## Usage
+### First run
 
-```bash
-ip_tv              # Launch TUI
-ip_tv update        # Update data (playlist + EPG + radio) without TUI
-ip_tv diag          # Show diagnostics (paths, URLs, cache info)
-ip_tv --debug       # Launch with debug logging to /tmp/neon_iptv.log
-```
+1. Launch `ip_tv-neon`.
+2. **Settings → Playlist URL** → paste your M3U/M3U8 URL (or a local file path).
+3. **Settings → EPG URL** → paste your XMLTV source. A default is pre-filled: `https://epg.one/epg.xml.gz`.
+4. **Main Menu → 🔄 Update** → downloads playlist, EPG and radio stations into the cache.
+5. **IPTV → category → channel → Enter** to open the detail screen, then `Enter`/`l` to play.
 
-## First Run
+The config file is created the first time a setting is saved. The cache is created by the first update.
 
-1. **Launch:** `ip_tv`
-2. **Set playlist:** Settings → Playlist URL → paste your M3U/M3U8 URL (or local path)
-3. **Set EPG:** Settings → EPG URL → paste your EPG source (default is pre-filled: `epg.one`)
-4. **Update data:** Main Menu → Update — downloads playlist, EPG, and radio stations
-5. **Watch:** Navigate to IPTV → pick a category → pick a channel → Enter
+---
 
 ## Configuration
 
-### File Locations
+### File locations (XDG)
 
-| Path | Description |
-|------|-------------|
-| `~/.config/neon-iptv/config.json` | Main config (URLs, theme, favorites, history) |
-| `~/.config/neon-iptv/ai_prompt.md` | AI system prompt (editable, auto-created on first AI use) |
-| `~/.cache/neon-iptv/data.bin` | Binary data cache (channels, EPG, radio) |
-| `/tmp/neon_iptv.log` | Debug log (only with `--debug`) |
-| `/tmp/neon_mpv.log` | MPV log (only with `--debug`) |
+| Path | What |
+|------|------|
+| `~/.config/neon-iptv/config.json` | Main config (URLs, theme, AI provider, favorites, history). Written `0600`, atomic replace. |
+| `~/.config/neon-iptv/ai_prompt.md` | Optional AI system-prompt override. **You create this** — it is never written by the app. |
+| `~/.cache/neon-iptv/data.bin` | Binary cache (channels, EPG, radio), prefixed with a schema version. |
+| `~/.cache/neon-iptv/neon_iptv.log` | App log — error/security events (e.g. blocked URL scheme, cache invalidation, EPG cap hit). |
+| `$TMPDIR/neon_mpv.log` | mpv's own log — only when launched with `--debug`. |
+| `$TMPDIR/neon_mpv_stderr.log` | Radio mpv stderr (always captured for radio). |
 
-Config and cache directories follow the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/). On most Linux systems:
-- Config: `~/.config/neon-iptv/`
-- Cache: `~/.cache/neon-iptv/`
+Paths follow the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/).
 
 ### config.json
-
-Created automatically on first run. You can edit it manually or via the in-app Settings screen.
 
 ```json
 {
   "playlist_url": "https://example.com/playlist.m3u",
-  "epg_url": "http://epg.one/epg.xml.gz",
+  "epg_url": "https://epg.one/epg.xml.gz",
   "theme_color": [0, 255, 255],
   "favorites": [],
   "history": [],
+  "channel_names": {},
   "video_fullscreen": true,
   "video_geometry": "1280x720",
   "local_dir": "",
-  "llm_provider": ""
+  "llm_provider": "deepseek"
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `playlist_url` | string | URL to M3U/M3U8 playlist, or local file path |
-| `epg_url` | string | URL to XMLTV EPG (supports `.xml.gz` gzip). Default: `http://epg.one/epg.xml.gz` |
-| `theme_color` | [R, G, B] | UI accent color. See theme presets below |
-| `favorites` | string[] | Stream URLs marked as favorites |
-| `history` | string[] | Last 200 watched stream URLs (auto-managed) |
-| `video_fullscreen` | bool | Launch mpv in fullscreen mode |
-| `video_geometry` | string | Window size when fullscreen is off (e.g. `"1920x1080"`) |
-| `local_dir` | string | Custom directory for local `.m3u`/`.m3u8` files. Empty = scan default dirs |
-| `llm_provider` | string | AI provider: `"deepseek"` (default) or `"gemini"` |
+| `playlist_url` | string | M3U/M3U8 URL, or a local file path. |
+| `epg_url` | string | XMLTV EPG URL (supports `.xml.gz`). Default: `https://epg.one/epg.xml.gz`. |
+| `theme_color` | `[R,G,B]` | UI accent color (one of the theme presets below). |
+| `favorites` | string[] | Stream URLs marked favorite. |
+| `history` | string[] | Last 200 watched stream URLs (auto-managed). |
+| `channel_names` | object | URL → name cache so favorites/history render without a loaded playlist (auto-managed). |
+| `video_fullscreen` | bool | Launch the mpv window fullscreen. |
+| `video_geometry` | string | mpv window size when fullscreen is off (e.g. `1920x1080`). |
+| `local_dir` | string | Directory to scan for local `.m3u`/`.m3u8`. Empty = scan `~/`, `~/Downloads/`, `~/Videos/`. |
+| `llm_provider` | string | Selected AI model — a catalog **id token** (see [The AI assistant](#the-ai-assistant)). Empty / unknown → `deepseek`. |
 
-### Settings Screen
+### Settings screen
 
-| # | Setting | Type | Description |
-|---|---------|------|-------------|
-| 1 | Playlist URL | edit | M3U/M3U8 playlist source |
-| 2 | EPG URL | edit | XMLTV EPG source |
-| 3 | Fullscreen | toggle | mpv fullscreen on/off |
-| 4 | Window Geometry | edit | mpv window size (e.g. `1280x720`) |
-| 5 | Theme | toggle | Cycle through 7 color presets |
-| 6 | AI Provider | toggle | Switch between DeepSeek and Gemini |
-| 7 | Local Playlists Dir | edit | Directory to scan for local `.m3u` files |
-| 8 | Clear History | action | Delete all history entries |
-| 9 | Clear Favorites | action | Delete all favorites |
+Open with **Main Menu → ⚙ Settings**. `↑↓` move, `Enter` edits or toggles, `Esc` goes back.
 
-### Theme Presets
+| # | idx | Setting | Action |
+|---|-----|---------|--------|
+| 1 | 0 | Playlist URL | edit |
+| 2 | 1 | EPG URL | edit |
+| 3 | 2 | Fullscreen | toggle |
+| 4 | 3 | Window Geometry | edit |
+| 5 | 4 | Theme | toggle (cycles 7 presets) |
+| 6 | 5 | **AI Provider** | toggle (cycles the model catalog) |
+| 7 | 6 | Local Playlists Dir | edit |
+| 8 | 7 | Clear History | action |
+| 9 | 8 | Clear Favorites | action |
 
-| Name | RGB |
-|------|-----|
-| Cyan | `[0, 255, 255]` |
-| Magenta | `[255, 0, 255]` |
-| Neon Green | `[0, 255, 128]` |
-| Orange | `[255, 128, 0]` |
-| Purple | `[128, 0, 255]` |
-| Yellow | `[255, 255, 0]` |
-| Red | `[255, 0, 0]` |
+### Theme presets
 
-### AI Chat Setup (optional)
+| Name | RGB | | Name | RGB |
+|------|-----|-|------|-----|
+| Cyan | `[0,255,255]` | | Purple | `[128,0,255]` |
+| Magenta | `[255,0,255]` | | Yellow | `[255,255,0]` |
+| Neon Green | `[0,255,128]` | | Red | `[255,0,0]` |
+| Orange | `[255,128,0]` | | | |
 
-The AI Chat feature supports two providers. Configure one or both:
+### The cache & `CACHE_SCHEMA_VERSION`
 
-#### DeepSeek (default)
+`data.bin` is a `bincode`-serialized `CacheContainer { version: u32, data: AppData }`. On load the app reads the
+first 4 little-endian bytes; if they don't equal the current `CACHE_SCHEMA_VERSION` (**currently `2`**), the cache
+is deleted and rebuilt on the next update — no panic, no stale-struct deserialize.
 
-1. Get an API key at https://platform.deepseek.com/
-2. Set the environment variable:
+**Bump policy:** increment `CACHE_SCHEMA_VERSION` (in `src/consts.rs`) **whenever the bincode layout of
+`CacheContainer`, `AppData`, `Channel`, `RadioStation` or `EpgProgram` changes** (add/remove/reorder a field, change
+a type). This is independent of the app/package version, so adding a field that only the cache stores never forces an
+app version bump. The JSON `config.json` schema is separate — e.g. `llm_provider` is stored as a `String`, so adding
+models never touches the cache schema.
+
+### Resource bounds
+
+EPG and playlist URLs are user-editable and point at third-party servers, so every byte read is bounded before
+allocation (defends against decompression bombs / OOM):
+
+| Limit | Value |
+|-------|-------|
+| EPG download (compressed/raw) | 128 MiB |
+| EPG after gzip decompression | 768 MiB |
+| EPG `<programme>` entries | 4,000,000 |
+| EPG distinct channel names | 200,000 |
+| Playlist download | 64 MiB |
+| Channels parsed per playlist | 500,000 |
+| `agy` subprocess wall-clock | 90 s (killed + reaped on timeout) |
+
+Hitting a cap is logged loudly to `neon_iptv.log` and truncates rather than crashing. The decompressed cap is sized
+with headroom over the default source (epg.one ≈ 417 MB decompressed as of 2026-06), so legitimate data is never cut.
+
+---
+
+## The AI assistant
+
+Open it from **Main Menu → 🤖 AI Chat**.
+
+### How the search works
+You type a request; the model replies (in Russian, concise) and — when you're looking for content — appends a final
+line `KEYWORDS: a, b, c`. The player then searches the **entire** EPG (every channel, the full schedule including
+archive) for those keywords and shows ranked results you can play with one keypress. The model is told to emit
+**specific, recognizable film/series titles** rather than broad genre words, because the search is title-weighted.
+
+### Genre-aware, word-boundary search
+Keyword matching is **whole-word and Unicode-aware**, not raw substring. A short keyword like `оно` matches the
+standalone title «Оно» but never the incidental substring inside `регионов`. A result qualifies only on a *strong*
+title hit (a distinctive keyword — a phrase or an 8+ char word — or a keyword that *leads* the title) or on **≥2**
+distinct keyword hits anywhere; titles score above descriptions. A small stop-word list drops generic terms
+("фильм", "сериал", "movie", "best", …). The net effect: results stay on-genre instead of being polluted by random
+substring collisions.
+
+### Model catalog
+Cycle through these in **Settings → AI Provider (idx 5)** by pressing `Enter`. The selected entry's **id token** is
+saved to `config.json` → `llm_provider`.
+
+| id token (`llm_provider`) | Label | Backend | Auth |
+|---|---|---|---|
+| `deepseek` *(default)* | DeepSeek | DeepSeek HTTP API (`deepseek-chat`) | `DEEPSEEK_API_KEY` |
+| `gemini` | Gemini (API) | Google Generative Language API (`gemini-2.5-flash`) | `GEMINI_API_KEY` |
+| `agy:gemini-3.5-flash` | AGY · Gemini 3.5 Flash | local `agy` CLI | keyless (agy login) |
+| `agy:gemini-3.1-pro` | AGY · Gemini 3.1 Pro | local `agy` CLI | keyless (agy login) |
+| `agy:claude-sonnet-4-6` | AGY · Claude Sonnet 4.6 | local `agy` CLI | keyless (agy login) |
+| `agy:claude-opus-4-6` | AGY · Claude Opus 4.6 | local `agy` CLI | keyless (agy login) |
+| `agy:gpt-oss-120b` | AGY · GPT-OSS 120B | local `agy` CLI | keyless (agy login) |
+
+Unknown/empty tokens fall back to `deepseek`; the legacy bare `gemini` value still resolves to the Gemini API row.
+
+### API-key backends (DeepSeek / Gemini)
 
 ```bash
-# Add to your shell profile (~/.bashrc, ~/.config/fish/config.fish, etc.)
-export DEEPSEEK_API_KEY="sk-your-key-here"
+# DeepSeek — https://platform.deepseek.com/
+export DEEPSEEK_API_KEY="sk-..."
+
+# Gemini  — https://aistudio.google.com/apikey
+export GEMINI_API_KEY="..."
 ```
 
-#### Google Gemini
+Put these in your shell profile or `/etc/environment` (the app reads them from the process environment).
 
-1. Get an API key at https://aistudio.google.com/apikey
-2. Add to system environment:
+### AGY backends (keyless)
+The `AGY · …` entries shell out to the local [`agy`](https://github.com/FormNest-Founder) (Antigravity) CLI in
+one-shot print mode — **no API key needed**, but:
 
-```bash
-# /etc/environment (system-wide) or shell profile
-GEMINI_API_KEY="your-api-key-here"
+- `agy` must be installed at `~/.local/bin/agy` (preferred) or anywhere on `PATH`, and
+- you must be **logged in** (`agy` → open the OAuth URL → paste the code).
+
+If `agy` isn't found, the AI Provider line shows `(agy not found)` and AGY queries return a loud Russian error
+instead of a blank reply. Each AGY call is hard-capped at 90 s.
+
+### Custom prompt & taste profile
+The system prompt is `ROLE_PREAMBLE` (fixed, anti-injection, TV-assistant role) + a **body**. The body comes from
+`~/.config/neon-iptv/ai_prompt.md` if it exists, otherwise a built-in default. Create the file to retune behavior —
+for example, add a personal taste section so recommendations match you:
+
+```markdown
+You are NEON AI, a personal TV/film expert.
+
+## USER TASTE
+- Loves: Villeneuve, A24, slow sci-fi, Scandinavian noir, stand-up.
+- Avoids: laugh-track sitcoms, reality TV, dubbed-over-original anime.
+- Prefers original audio with subtitles.
+
+When recommending, weight toward the "Loves" list and end with:
+KEYWORDS: title1, title2, title3
 ```
 
-Switch between providers in Settings → AI Provider (press Enter to toggle).
+The preamble is always prepended and **cannot** be overridden by this file — the assistant keeps its TV role on
+every backend, and untrusted channel/EPG text is treated as data, never as instructions.
 
-#### Custom System Prompt
+---
 
-The AI behavior is controlled by `~/.config/neon-iptv/ai_prompt.md`. Edit this file to customize how the AI responds — no rebuild needed. If the file doesn't exist, a built-in default is used.
+## Keybindings
 
-Without any API key, all other features work normally — AI Chat will show an error message when accessed.
+Read straight from the input handlers in `main.rs`.
 
-## Playlist Format
+### Global
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Move selection |
+| `Enter` | Select / open / play |
+| `Esc` | Back one screen (or stop playback) |
+| `Ctrl+C` | Quit (from menus and lists) |
+
+### Channel list
+| Key | Action |
+|-----|--------|
+| `Enter` | Open the channel's detail/EPG screen |
+| `f` | Toggle favorite for the highlighted channel |
+| *type letters* | Live search filter |
+| `Backspace` | Delete one search character |
+| `Esc` | Clear search, back to categories |
+
+> Note: in the channel list `f` always toggles favorite, so it can't be typed into the search box; every other
+> letter filters.
+
+### Detail / EPG screen
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Move through programmes |
+| `Enter` | Play the selected programme (live → direct, past+archive → catchup URL) |
+| `l` | Play the live stream |
+| `f` | Toggle favorite |
+| `Esc` | Back |
+
+### Radio (while a station plays)
+| Key | Action |
+|-----|--------|
+| `Space` | Pause / resume |
+| `+` / `=` / `-` | Volume ±5 |
+| `m` | Mute / unmute |
+| `↑` / `↓` | Switch station (list stays live) |
+| `Enter` | Play the highlighted station |
+| `Esc` | Stop and close the player |
+
+### AI Chat
+| Key | Action |
+|-----|--------|
+| *type letters* | Chat input |
+| `Enter` | Send the message (when input is focused) |
+| `Tab` | Toggle focus between chat input and results |
+| `↑` / `↓` | Move through results (when results are focused) |
+| `Enter` | Play the selected result (when results are focused) |
+| `d` | Open the result's channel detail (when results are focused) |
+| `Esc` | Back to the main menu |
+
+### TV playback
+While an mpv video window is open the TUI shows a "NOW PLAYING" overlay; press `Esc` to stop and return.
+
+---
+
+## Playlist format
 
 Standard M3U/M3U8 with extended attributes:
 
@@ -255,27 +383,22 @@ http://stream.example.com/live/stream.m3u8
 http://another.stream/live
 ```
 
-| Attribute | Description |
-|-----------|-------------|
-| `tvg-id` | EPG channel ID (for matching EPG data) |
-| `tvg-name` | Display name override |
-| `group-title` | Category name |
-| `tvg-rec` | Archive days available (enables TimeShift) |
+| Attribute | Meaning |
+|-----------|---------|
+| `tvg-id` | EPG channel id (primary EPG match key) |
+| `tvg-name` | Display-name fallback used as the EPG id if `tvg-id` is absent |
+| `group-title` / `#EXTGRP:` | Category |
+| `tvg-rec` | Archive days available → enables TimeShift |
 
-Playlists can be loaded from:
-- **HTTP/HTTPS URL** — set in config or Settings
-- **Local file** — set path in Playlist URL, or use the Local Playlists screen (scans configured directory or defaults)
+Channels without a URL are dropped. Names, group titles and EXTGRP values are terminal-sanitized.
 
-## EPG Format
+## EPG format
 
-Standard [XMLTV](http://wiki.xmltv.org/index.php/XMLTVFormat) format, optionally gzip-compressed (`.xml.gz`):
+Standard [XMLTV](http://wiki.xmltv.org/index.php/XMLTVFormat), optionally gzip-compressed:
 
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
 <tv>
-  <channel id="channel.id">
-    <display-name>Channel Name</display-name>
-  </channel>
+  <channel id="channel.id"><display-name>Channel Name</display-name></channel>
   <programme start="20260314120000 +0300" stop="20260314130000 +0300" channel="channel.id">
     <title>Program Title</title>
     <desc>Program description</desc>
@@ -283,151 +406,70 @@ Standard [XMLTV](http://wiki.xmltv.org/index.php/XMLTVFormat) format, optionally
 </tv>
 ```
 
-EPG channels are matched to playlist channels by `tvg-id` first, then by normalized channel name.
+EPG is matched to playlist channels by `tvg-id`, then by normalized `display-name`. Programmes that ended more than
+a day ago are dropped at parse time; the detail screen extends the window back by `tvg-rec` days for archive replay.
 
-## Keyboard Controls
-
-### Global
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate lists |
-| `Enter` | Select / Play |
-| `Esc` | Go back / Stop playback |
-| `Ctrl+C` | Quit |
-
-### Channel List
-
-| Key | Action |
-|-----|--------|
-| `f` | Toggle favorite |
-| `d` | Open channel detail (EPG schedule) |
-| Type letters | Real-time search filter |
-| `Backspace` | Clear search character |
-
-### Detail Screen (EPG)
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Play selected program (live or archive) |
-| `l` | Play live stream |
-| `f` | Toggle favorite |
-| `Esc` | Back to channel list |
-
-### AI Chat
-
-| Key | Action |
-|-----|--------|
-| `Tab` | Toggle focus between results and chat input |
-| Type letters | Chat input |
-| `Enter` | Send message / Play selected result |
-| `d` | Open channel detail for selected result |
-| `Esc` | Back to main menu |
-
-### Settings
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Edit setting / Toggle / Execute action |
-| Type | Edit value |
-| `Enter` | Save edited value |
-| `Esc` | Cancel edit |
+---
 
 ## Architecture
 
 ```
 src/
-├── main.rs     533 lines  Event loop, async tasks, key handling, suspended mode
-├── ui.rs       826 lines  Screen rendering (ratatui widgets, themes, icons, layout)
-├── app.rs      396 lines  App state, mpv launch, filters, navigation
-├── ai.rs       456 lines  LLM chat (DeepSeek + Gemini), EPG context, keyword extraction
-├── epg.rs      300 lines  M3U/EPG/radio parsing, XML parser, cache, local scanning
-├── models.rs   159 lines  Data structures (Config, Channel, Screen, AppData)
-├── utils.rs     28 lines  Normalize, XML time parser, logging
-└── consts.rs    27 lines  Constants, XDG paths, API endpoints
-                ──────
-                ~2725 lines total
+├── main.rs     691 lines   Event loop, async tasks (radio/AI/update), key dispatch, diagnostics
+├── ui.rs      1388 lines   ratatui rendering — screens, themes, icons, radio VU panel
+├── app.rs      712 lines   App state, mpv launch (+protocol whitelist), filters, settings
+├── ai.rs       849 lines   Model catalog, DeepSeek/Gemini/AGY backends, keyword + EPG search
+├── epg.rs      512 lines   M3U/EPG/radio ingest, XMLTV parser, bincode cache, local scan
+├── mpv_ipc.rs  231 lines   mpv JSON IPC over a Unix socket (radio: volume/pause/mute/metadata)
+├── models.rs   232 lines   Config, Channel, RadioStation, EpgProgram, AppData, Screen
+├── consts.rs    64 lines   Versions, XDG paths, API endpoints, resource caps
+├── utils.rs     39 lines   normalize, XML time parse, terminal sanitizer, logging
+└── lib.rs        5 lines   Test surface (ai, consts, epg, models, utils)
 ```
 
-### Data Flow
-
+### Data flow
 ```
-Playlist URL (M3U)  ──→  epg.rs (parse)  ──→  AppData.channels
-EPG URL (XMLTV)     ──→  epg.rs (parse)  ──→  AppData.epg
-Radio API           ──→  epg.rs (fetch)  ──→  AppData.radio
-                                              ↓
-                                         data.bin (bincode cache)
-                                              ↓
-                                         app.rs (App state)
-                                              ↓
-                                         ui.rs (render) ──→ Terminal
-                                              ↓
-                                         mpv (external player)
+Playlist (M3U) ┐
+EPG (XMLTV)    ┼─→ epg.rs parse ─→ AppData ─→ data.bin (bincode cache) ─→ App ─→ ui.rs ─→ terminal
+Radio API      ┘                                                          └─→ mpv (external player)
 ```
 
-### AI Pipeline
-
+### AI pipeline
 ```
-User query ──→ LLM (DeepSeek or Gemini)
-                    ↓
-              system prompt (EPG summary + history)
-                    ↓
-              AI response + extracted keywords
-                    ↓
-              TF-IDF search across all EPG programs
-                    ↓
-              ranked results (live > future > archive)
-                    ↓
-              select + Enter → mpv playback
+user query ─→ LLM (DeepSeek | Gemini | AGY)  ── system: role preamble + prompt + EPG/now + history
+                          ↓
+              reply text + "KEYWORDS: …"
+                          ↓
+              genre-aware word-boundary EPG search (title-weighted)
+                          ↓
+              ranked results (live → score → start) ─→ Enter ─→ mpv
 ```
 
-## Tech Stack
+## Tech stack
 
-| Component | Crate/Tool | Purpose |
-|-----------|------------|---------|
-| Async runtime | `tokio` | Non-blocking I/O, process management |
-| TUI framework | `ratatui` + `crossterm` | Terminal UI rendering |
-| HTTP client | `reqwest` | Playlist/EPG/API fetching |
-| XML parser | `quick-xml` | EPG XMLTV parsing |
-| Compression | `flate2` | Gzip EPG decompression |
-| Serialization | `bincode` + `serde` | Binary cache, JSON config |
-| Regex | `regex` | M3U attribute parsing |
-| Time | `chrono` | EPG time parsing, UTC operations |
-| Media player | `mpv` (external) | Stream playback |
-| AI (option 1) | DeepSeek V3 API | TV assistant |
-| AI (option 2) | Gemini 2.5 Flash API | TV assistant |
-| Build | Clang + LLD | Fat LTO, codegen-units=1, strip=symbols |
+| Area | Crate / tool |
+|------|--------------|
+| Async runtime | `tokio` |
+| TUI | `ratatui` + `crossterm` |
+| HTTP | `reqwest` |
+| XML | `quick-xml` |
+| Gzip | `flate2` |
+| Serialization | `bincode` (cache) + `serde`/`serde_json` (config) |
+| Regex | `regex` |
+| Time | `chrono` |
+| Player | `mpv` (external, JSON IPC) |
+| AI | DeepSeek API, Gemini API, `agy` CLI |
 
-## Troubleshooting
+## Tests
 
-### No channels after update
-- Check your playlist URL in Settings — it must be a valid M3U/M3U8
-- Run `ip_tv diag` to verify paths and URLs
-- Check if the URL is accessible: `curl -I "your-playlist-url"`
+```bash
+cargo test
+```
 
-### No EPG data
-- Verify EPG URL in Settings
-- EPG matching uses `tvg-id` from playlist — ensure your playlist has `tvg-id` attributes
-- Run update again — EPG download can be slow for large files
-
-### mpv doesn't start
-- Ensure mpv is installed: `mpv --version`
-- Check stream URL manually: `mpv "stream-url"`
-- Use `--debug` flag and check `/tmp/neon_mpv.log`
-
-### Cache issues
-- Delete cache to force full reload: `rm ~/.cache/neon-iptv/data.bin`
-- Cache auto-resets when the app version changes
-
-### AI Chat shows error
-- **DeepSeek:** Set `DEEPSEEK_API_KEY` environment variable. Verify: `curl -H "Authorization: Bearer $DEEPSEEK_API_KEY" https://api.deepseek.com/v1/models`
-- **Gemini:** Set `GEMINI_API_KEY` environment variable. Verify: `curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY"`
-- Switch provider in Settings → AI Provider if one isn't working
-
-## About
-
-Written by [Claude](https://claude.ai) (Anthropic) under the architectural direction of a human SRE. Every design decision, feature scope, and code review — human. Every line of code — AI. This is what human-AI collaboration looks like when the human knows what they want and the AI knows how to build it.
+Covers keyword extraction, the model catalog (unique ids, cycle wrap, legacy/unknown resolution, agy resolver),
+EPG-search relevance (the genre-agnostic word-boundary fix and its collision classes), EPG id matching, config
+round-trip, and the cache version-prefix invariant.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
