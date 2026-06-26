@@ -95,15 +95,20 @@ async fn main() {
         if a.is_empty() { "подборка ужастиков".into() } else { a.join(" ") }
     };
 
-    let system = load_system_prompt().await;
-    let prompt = format!("{system}\n\nUSER: {query}\nASSISTANT:");
-    let out = std::process::Command::new("/home/admin/.local/bin/agy")
-        .args(["-p", &prompt, "--model", "gemini-3.5-flash", "--print-timeout", "90s"])
-        .output()
-        .expect("agy failed");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let (_c, kw) = extract_keywords(&stdout);
-    let keywords = kw.unwrap_or_default();
+    // Replay mode: "--kw a,b,c" skips agy and uses the given keywords verbatim.
+    let keywords: Vec<String> = if let Some(rest) = query.strip_prefix("--kw ") {
+        rest.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect()
+    } else {
+        let system = load_system_prompt().await;
+        let prompt = format!("{system}\n\nUSER: {query}\nASSISTANT:");
+        let out = std::process::Command::new("/home/admin/.local/bin/agy")
+            .args(["-p", &prompt, "--model", "gemini-3.5-flash", "--print-timeout", "90s"])
+            .output()
+            .expect("agy failed");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let (_c, kw) = extract_keywords(&stdout);
+        kw.unwrap_or_default()
+    };
 
     let data = load_data();
     let now = chrono::Utc::now().timestamp();
