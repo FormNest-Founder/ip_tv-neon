@@ -104,17 +104,21 @@ fn prog(title: &str, desc: &str, now: i64) -> EpgProgram {
     }
 }
 
-/// Reproduces the relevance bug: a substring keyword ("оно") used to match inside
-/// "регИОНОв" (cooking show) and a lone description keyword used to pull in an
-/// unrelated action film. The fix (whole-word matching + title-or-≥2-desc gate)
-/// must exclude both while keeping a real horror whose title carries the keyword.
+/// Reproduces the relevance bug across its collision classes: a substring keyword
+/// ("оно" in "регИОНОв", cooking show), a lone description keyword (action film),
+/// and a short common word buried in a longer title ("душа" in "Тело и душа",
+/// relaxation show). The fix (whole-word matching + distinctiveness/leading gate +
+/// title-or-≥2-hit threshold) must exclude all three while keeping the real films
+/// whose title carries or leads with the keyword — and stay genre-agnostic.
 #[test]
-fn search_epg_excludes_substring_and_lone_desc_false_positives() {
+fn search_epg_excludes_substring_lone_desc_and_buried_common_word() {
     let now = 1_700_000_000;
     let channels = vec![
         chan("Пятница! +2", "fri"),
         chan("Боевик HD", "act"),
         chan("Ужасы HD", "hor"),
+        chan("MyZen 4K", "zen"),
+        chan("Пиксар HD", "pix"),
     ];
     let mut epg = std::collections::HashMap::new();
     // Cooking show: "регионов" contains the substring "оно" — must NOT match.
@@ -140,13 +144,23 @@ fn search_epg_excludes_substring_and_lone_desc_false_positives() {
         "hor".to_string(),
         vec![prog("Заклятие 2", "Семья сталкивается с проклятием.", now)],
     );
+    // Relaxation show: "душа" is a buried, non-leading common word — must NOT match.
+    epg.insert(
+        "zen".to_string(),
+        vec![prog("Тело и душа (расслабление)", "Спокойная музыка.", now)],
+    );
+    // Pixar film «Душа»: the keyword leads the title — MUST match.
+    epg.insert(
+        "pix".to_string(),
+        vec![prog("Душа", "Мультфильм студии Pixar.", now)],
+    );
 
     let data = AppData {
         channels,
         epg,
         ..Default::default()
     };
-    let keywords: Vec<String> = ["оно", "убийца", "заклятие"]
+    let keywords: Vec<String> = ["оно", "убийца", "заклятие", "душа"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -167,5 +181,13 @@ fn search_epg_excludes_substring_and_lone_desc_false_positives() {
     assert!(
         !titles.iter().any(|t| t == "Джон Уик 3"),
         "action film with a lone desc keyword must be excluded, got {titles:?}"
+    );
+    assert!(
+        titles.iter().any(|t| t == "Душа"),
+        "real film whose title leads with the keyword must be retained, got {titles:?}"
+    );
+    assert!(
+        !titles.iter().any(|t| t.contains("Тело и душа")),
+        "show with a buried common word 'душа' must be excluded, got {titles:?}"
     );
 }
