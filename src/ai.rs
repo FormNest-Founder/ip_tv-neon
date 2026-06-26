@@ -716,6 +716,25 @@ fn word_contains(haystack: &str, needle: &str) -> bool {
     false
 }
 
+/// A keyword distinctive enough to count as a strong title hit anywhere in the
+/// title: a multi-word phrase ("blade runner") or a long word ("зверополис").
+/// Short single words ("душа", "оно", "soul") are common and must instead lead
+/// the title to be strong — otherwise they collide with unrelated content.
+fn is_distinctive(kw: &str) -> bool {
+    kw.contains(' ') || kw.chars().count() >= 8
+}
+
+/// Whether `kw` is the leading word of `title_lower` (after skipping leading
+/// punctuation such as guillemets), bounded by a non-alphanumeric char or the
+/// end. Lets the film «Душа» match on "душа" while "Тело и душа" does not.
+fn leads_title(title_lower: &str, kw: &str) -> bool {
+    let head = title_lower.trim_start_matches(|c: char| !c.is_alphanumeric());
+    match head.strip_prefix(kw) {
+        Some(rest) => rest.chars().next().is_none_or(|c| !c.is_alphanumeric()),
+        None => false,
+    }
+}
+
 /// Search EPG across all channels using keywords
 pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearchResult> {
     let kw_lower: Vec<String> = keywords.iter().map(|k| k.to_lowercase()).collect();
@@ -746,12 +765,19 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
                         })
                         .count() as u32;
 
-                    // Precision gate: a title keyword is a strong signal; a lone
-                    // generic word in the description is not. Require a title hit
-                    // OR ≥2 distinct description keywords, so an incidental single
-                    // desc word no longer pulls in unrelated programmes. Title is
-                    // weighted above desc so title matches always sort first.
-                    let qualifies = title_hits >= 1 || desc_hits >= 2;
+                    // A title hit only counts as strong when the keyword is
+                    // distinctive or leads the title; a short common word buried
+                    // in a longer title ("душа" in "Тело и душа") is weak.
+                    let strong_title = kw_lower.iter().any(|kw| {
+                        word_contains(&title_lower, kw)
+                            && (is_distinctive(kw) || leads_title(&title_lower, kw))
+                    });
+
+                    // Precision gate: a strong title hit, or ≥2 distinct keyword
+                    // hits anywhere, so neither a lone generic desc word nor a
+                    // common word buried in a title pulls in unrelated programmes.
+                    // Title is weighted above desc so title matches sort first.
+                    let qualifies = strong_title || (title_hits + desc_hits) >= 2;
                     let score = title_hits * 3 + desc_hits;
 
                     if qualifies {
