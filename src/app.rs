@@ -473,7 +473,7 @@ impl App {
                 .arg("--demuxer-lavf-o=http_persistent=1") 
                 .arg("--network-timeout=10")
                 // FFmpeg & GPU Optimizations (AMD Vega 11)
-                .arg("--hwdec=auto-safe") // Enable FFmpeg VAAPI hardware decoding
+                .arg("--hwdec=vaapi-copy") // VAAPI copy-back decode (Vega 11: no VK_KHR_video_decode_queue, vulkan hwdec crashes)
                 .arg("--vo=gpu-next") // Modern GPU renderer
                 .arg("--gpu-api=vulkan") // Use Vulkan (RADV) instead of OpenGL
                 .arg("--vd-lavc-threads=4"); // Multi-threading for fallback CPU decoding
