@@ -123,6 +123,17 @@ fn is_http_url(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+/// Build a flussonic catch-up (archive) URL.
+///
+/// `utc` is the requested archive start (program start time). `lutc` must be
+/// the *current* live-edge timestamp (i.e. "now"), NOT the program's stop time:
+/// flussonic interprets `lutc` as the current wall-clock of the live stream and
+/// uses it to anchor the catch-up window. Passing the program stop made the
+/// provider serve the live edge / an empty window instead of the past archive.
+fn build_archive_url(base: &str, utc: i64, lutc: i64) -> String {
+    format!("{base}?utc={utc}&lutc={lutc}")
+}
+
 // ─── Constructor & Data Loading ──────────────────────────────────────────────
 
 impl App {
@@ -355,7 +366,8 @@ impl App {
                 if is_current || is_future {
                     self.run_mpv(&url, &name, &prog_title, false);
                 } else if ch.catchup_days > 0 {
-                    let archive_url = format!("{}?utc={}&lutc={}", url, prog_start, prog_stop);
+                    // lutc = now (live edge), not prog_stop — flussonic catch-up convention.
+                    let archive_url = build_archive_url(&url, prog_start, now);
                     self.run_mpv(&archive_url, &name, &prog_title, false);
                 } else {
                     self.run_mpv(&url, &name, &prog_title, false);
@@ -530,10 +542,8 @@ impl App {
             if is_current || is_future {
                 self.run_mpv(&url, &name, &result.program.title, false);
             } else if ch.catchup_days > 0 {
-                let archive_url = format!(
-                    "{}?utc={}&lutc={}",
-                    url, result.program.start, result.program.stop
-                );
+                // lutc = now (live edge), not program.stop — flussonic catch-up convention.
+                let archive_url = build_archive_url(&url, result.program.start, now);
                 self.run_mpv(&archive_url, &name, &result.program.title, false);
             } else {
                 self.run_mpv(&url, &name, &result.program.title, false);
@@ -708,5 +718,26 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_archive_url;
+
+    #[test]
+    fn archive_url_uses_now_as_lutc_not_prog_stop() {
+        let base = "http://host/iptv/TOKEN/204/index.m3u8";
+        let prog_start = 1_700_000_000_i64;
+        let prog_stop = prog_start + 1800; // a past program end
+        let now = 1_700_100_000_i64; // current live edge, later than prog_stop
+
+        let url = build_archive_url(base, prog_start, now);
+
+        // utc must stay the program start (the requested archive window).
+        assert!(url.contains(&format!("utc={prog_start}")));
+        // lutc must be "now", never the program stop — that was the bug.
+        assert!(url.ends_with(&format!("lutc={now}")));
+        assert!(!url.contains(&format!("lutc={prog_stop}")));
     }
 }
