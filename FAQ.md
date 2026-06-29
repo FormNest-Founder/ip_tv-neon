@@ -150,7 +150,7 @@ working, and it never touches plain-http/IPTV streams with no named renditions.
 
 Most often it's the **provider serving the stream slower than its own encoded bitrate**, not the app. NEON-IPTV
 already launches TV mpv with generous HLS buffering (`--cache=yes`, `--demuxer-max-bytes=1000MiB`,
-`--hls-bitrate=max`, `http_persistent=1`, `--network-timeout=10`) plus AMD VAAPI/Vulkan hwdec. To confirm where the
+`--hls-bitrate=max`, `http_persistent=1`, `--network-timeout=10`) plus cross-platform hardware decoding (`--hwdec=auto`). To confirm where the
 bottleneck is:
 
 ```bash
@@ -160,8 +160,7 @@ mpv --hls-bitrate=max --cache=yes "STREAM_URL"
 #   cache draining + speed < bitrate  →  the upstream is throttling (provider-side).
 ```
 
-If a direct `mpv` plays just as badly, it's the source. If it plays fine but NEON-IPTV's window stutters, check GPU
-hwdec (`--hwdec=auto-safe`, Vulkan) for your hardware. Radio "buffering" is usually the station, not mpv.
+If a direct `mpv` plays just as badly, it's the source. If it plays fine but NEON-IPTV's window stutters, check if your GPU is properly utilized (the app uses `--hwdec=auto` by default). Radio "buffering" is usually the station, not mpv.
 
 ---
 

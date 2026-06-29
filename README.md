@@ -72,7 +72,7 @@ NEON-IPTV bundles four things behind one neon TUI:
 ### Playback
 - **mpv as the player** — your install, your config, your shaders and hwdec. The app spawns mpv as an async child
   and gets out of the way.
-- TV streams open in an mpv window with HLS cache tuning and AMD VAAPI/Vulkan hwdec flags; radio runs windowless
+- TV streams open in an mpv window with HLS cache tuning and cross-platform hardware decoding (`--hwdec=auto`); radio runs windowless
   (`--no-video`) under an IPC socket.
 - **Protocol whitelist** — only `http://` / `https://` media URLs ever reach mpv; `file://`, `edl://` and other
   pseudo-protocols a crafted playlist might inject are blocked before playback starts.
@@ -411,18 +411,19 @@ a day ago are dropped at parse time; the detail screen extends the window back b
 
 ---
 
-## Architecture
+## Architecture (Decoupled & SOLID)
 
 ```
 src/
-├── main.rs     691 lines   Event loop, async tasks (radio/AI/update), key dispatch, diagnostics
-├── ui.rs      1388 lines   ratatui rendering — screens, themes, icons, radio VU panel
-├── app.rs      712 lines   App state, mpv launch (+protocol whitelist), filters, settings
-├── ai.rs       849 lines   Model catalog, DeepSeek/Gemini/AGY backends, keyword + EPG search
-├── epg.rs      512 lines   M3U/EPG/radio ingest, XMLTV parser, bincode cache, local scan
-├── mpv_ipc.rs  231 lines   mpv JSON IPC over a Unix socket (radio: volume/pause/mute/metadata)
-├── models.rs   232 lines   Config, Channel, RadioStation, EpgProgram, AppData, Screen
-├── consts.rs    64 lines   Versions, XDG paths, API endpoints, resource caps
+├── main.rs     721 lines   Event loop, decoupled screen-specific input controllers
+├── ui.rs      1220 lines   ratatui rendering — data-driven icons, screens, themes
+├── app.rs      489 lines   Domain App state, config, filters, search logic
+├── player.rs   273 lines   PlayerController: OS processes, mpv execution, IPC lifecycle
+├── ai.rs       849 lines   Model catalog, DeepSeek/Gemini/AGY backends, AI search
+├── epg.rs      512 lines   M3U/EPG/radio ingest, XMLTV parser, bincode cache
+├── mpv_ipc.rs  231 lines   mpv JSON IPC over Unix sockets
+├── models.rs   232 lines   Config, Channel, EpgProgram, AppData, Screen, ViewStates
+├── consts.rs    64 lines   Versions, API endpoints, static UI data
 ├── utils.rs     39 lines   normalize, XML time parse, terminal sanitizer, logging
 └── lib.rs        5 lines   Test surface (ai, consts, epg, models, utils)
 ```
