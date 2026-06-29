@@ -72,7 +72,7 @@ NEON-IPTV bundles four things behind one neon TUI:
 ### Playback
 - **mpv as the player** — your install, your config, your shaders and hwdec. The app spawns mpv as an async child
   and gets out of the way.
-- TV streams open in an mpv window with HLS cache tuning and cross-platform hardware decoding (`--hwdec=auto`); radio runs windowless
+- TV streams open in an mpv window with HLS cache tuning; hardware decoding and GPU APIs are deferred to your `mpv.conf` to ensure safe cross-platform defaults; radio runs windowless
   (`--no-video`) under an IPC socket.
 - **Protocol whitelist** — only `http://` / `https://` media URLs ever reach mpv; `file://`, `edl://` and other
   pseudo-protocols a crafted playlist might inject are blocked before playback starts.
