@@ -1,6 +1,7 @@
 // ─── Imports ─────────────────────────────────────────────────────────────────
 
-use crate::app::{App, VU_BARS};
+use crate::app::App;
+use crate::player::VU_BARS;
 use crate::epg::get_current_epg;
 use crate::models::{Channel, Screen, SETTINGS_COUNT, SETTINGS_LABELS};
 use crate::utils::sanitize_terminal as sanitize;
@@ -60,284 +61,115 @@ fn marquee_slice(text: &str, offset: usize, width: usize) -> String {
     out
 }
 
-// ─── Category Icons ─────────────────────────────────────────────────────────
+static CATEGORY_ICONS: &[(&[&str], &str)] = &[
+    (&["usa", "сша", "america"], "🇺🇸"),
+    (&["belarus", "белар"], "🇧🇾"),
+    (&["russia", "росси", "рф"], "🇷🇺"),
+    (&["ukrain", "украин"], "🇺🇦"),
+    (&["kazakh", "казах"], "🇰🇿"),
+    (&["uk ", "^uk", "british", "англ"], "🇬🇧"),
+    (&["german", "немец", "deutsch"], "🇩🇪"),
+    (&["france", "франц", "french"], "🇫🇷"),
+    (&["italy", "итал", "italian"], "🇮🇹"),
+    (&["spain", "испан", "spanish"], "🇪🇸"),
+    (&["turkey", "турц", "türk"], "🇹🇷"),
+    (&["india", "инди", "hindi"], "🇮🇳"),
+    (&["china", "кита", "chinese"], "🇨🇳"),
+    (&["japan", "япон"], "🇯🇵"),
+    (&["korea", "коре"], "🇰🇷"),
+    (&["arab", "араб"], "🇸🇦"),
+    (&["israel", "израил"], "🇮🇱"),
+    (&["poland", "поль", "polsk"], "🇵🇱"),
+    (&["czech", "чеш"], "🇨🇿"),
+    (&["canada", "канад"], "🇨🇦"),
+    (&["brazil", "бразил"], "🇧🇷"),
+    (&["georgia", "грузи"], "🇬🇪"),
+    (&["armenia", "армен"], "🇦🇲"),
+    (&["azerbai", "азерб"], "🇦🇿"),
+    (&["uzbek", "узбек"], "🇺🇿"),
+    (&["moldov", "молдов"], "🇲🇩"),
+    (&["latin", "латин"], "🌎"),
+    (&["europe", "европ"], "🌍"),
+    (&["asia", "азия"], "🌏"),
+    (&["internat", "междунар", "world", "мир"], "🌐"),
+    (&["кино", "фильм", "movie", "cinema"], "🎬"),
+    (&["сериал", "series"], "🎭"),
+    (&["мульт", "cartoon", "kids", "детск", "child"], "🧸"),
+    (&["спорт", "sport", "football", "футбол"], "⚽"),
+    (&["новост", "news"], "📰"),
+    (&["музык", "music"], "🎵"),
+    (&["наук", "science", "discovery", "nat geo"], "🔬"),
+    (&["document", "докум"], "📚"),
+    (&["образов", "educat"], "🎓"),
+    (&["религ", "relig", "духов"], "🕊 "),
+    (&["эротик", "adult", "xxx", "18+"], "🔞"),
+    (&["travel", "путеш"], "✈ "),
+    (&["кулинар", "cook", "food", "еда"], "🍳"),
+    (&["fashion", "мода", "style"], "👗"),
+    (&["humor", "юмор", "comedy", "комед"], "😂"),
+    (&["horror", "ужас"], "👻"),
+    (&["познав", "develop"], "💡"),
+    (&["shop", "магаз", "телемаг"], "🛒"),
+    (&["radost", "радост"], "🌈"),
+    (&["retro", "ретро", "classic", "классик", "совет"], "📽 "),
+    (&["hd", "uhd", "4k"], "📺"),
+];
 
 fn category_icon(name: &str) -> &'static str {
     let n = name.to_lowercase();
-    if n.contains("usa") || n.contains("сша") || n.contains("america") {
-        return "🇺🇸";
-    }
-    if n.contains("belarus") || n.contains("белар") {
-        return "🇧🇾";
-    }
-    if n.contains("russia") || n.contains("росси") || n.contains("рф") {
-        return "🇷🇺";
-    }
-    if n.contains("ukrain") || n.contains("украин") {
-        return "🇺🇦";
-    }
-    if n.contains("kazakh") || n.contains("казах") {
-        return "🇰🇿";
-    }
-    if n.contains("uk ") || n.starts_with("uk") || n.contains("british") || n.contains("англ") {
-        return "🇬🇧";
-    }
-    if n.contains("german") || n.contains("немец") || n.contains("deutsch") {
-        return "🇩🇪";
-    }
-    if n.contains("france") || n.contains("франц") || n.contains("french") {
-        return "🇫🇷";
-    }
-    if n.contains("italy") || n.contains("итал") || n.contains("italian") {
-        return "🇮🇹";
-    }
-    if n.contains("spain") || n.contains("испан") || n.contains("spanish") {
-        return "🇪🇸";
-    }
-    if n.contains("turkey") || n.contains("турц") || n.contains("türk") {
-        return "🇹🇷";
-    }
-    if n.contains("india") || n.contains("инди") || n.contains("hindi") {
-        return "🇮🇳";
-    }
-    if n.contains("china") || n.contains("кита") || n.contains("chinese") {
-        return "🇨🇳";
-    }
-    if n.contains("japan") || n.contains("япон") {
-        return "🇯🇵";
-    }
-    if n.contains("korea") || n.contains("коре") {
-        return "🇰🇷";
-    }
-    if n.contains("arab") || n.contains("араб") {
-        return "🇸🇦";
-    }
-    if n.contains("israel") || n.contains("израил") {
-        return "🇮🇱";
-    }
-    if n.contains("poland") || n.contains("поль") || n.contains("polsk") {
-        return "🇵🇱";
-    }
-    if n.contains("czech") || n.contains("чеш") {
-        return "🇨🇿";
-    }
-    if n.contains("canada") || n.contains("канад") {
-        return "🇨🇦";
-    }
-    if n.contains("brazil") || n.contains("бразил") {
-        return "🇧🇷";
-    }
-    if n.contains("georgia") || n.contains("грузи") {
-        return "🇬🇪";
-    }
-    if n.contains("armenia") || n.contains("армен") {
-        return "🇦🇲";
-    }
-    if n.contains("azerbai") || n.contains("азерб") {
-        return "🇦🇿";
-    }
-    if n.contains("uzbek") || n.contains("узбек") {
-        return "🇺🇿";
-    }
-    if n.contains("moldov") || n.contains("молдов") {
-        return "🇲🇩";
-    }
-    if n.contains("latin") || n.contains("латин") {
-        return "🌎";
-    }
-    if n.contains("europe") || n.contains("европ") {
-        return "🌍";
-    }
-    if n.contains("asia") || n.contains("азия") {
-        return "🌏";
-    }
-    if n.contains("internat") || n.contains("междунар") || n.contains("world") || n.contains("мир")
-    {
-        return "🌐";
-    }
-    if n.contains("кино") || n.contains("фильм") || n.contains("movie") || n.contains("cinema")
-    {
-        return "🎬";
-    }
-    if n.contains("сериал") || n.contains("series") {
-        return "🎭";
-    }
-    if n.contains("мульт")
-        || n.contains("cartoon")
-        || n.contains("kids")
-        || n.contains("детск")
-        || n.contains("child")
-    {
-        return "🧸";
-    }
-    if n.contains("спорт") || n.contains("sport") || n.contains("football") || n.contains("футбол")
-    {
-        return "⚽";
-    }
-    if n.contains("новост") || n.contains("news") {
-        return "📰";
-    }
-    if n.contains("музык") || n.contains("music") {
-        return "🎵";
-    }
-    if n.contains("наук")
-        || n.contains("science")
-        || n.contains("discovery")
-        || n.contains("nat geo")
-    {
-        return "🔬";
-    }
-    if n.contains("document") || n.contains("докум") {
-        return "📚";
-    }
-    if n.contains("образов") || n.contains("educat") {
-        return "🎓";
-    }
-    if n.contains("религ") || n.contains("relig") || n.contains("духов") {
-        return "🕊 ";
-    }
-    if n.contains("эротик") || n.contains("adult") || n.contains("xxx") || n.contains("18+") {
-        return "🔞";
-    }
-    if n.contains("travel") || n.contains("путеш") {
-        return "✈ ";
-    }
-    if n.contains("кулинар") || n.contains("cook") || n.contains("food") || n.contains("еда")
-    {
-        return "🍳";
-    }
-    if n.contains("fashion") || n.contains("мода") || n.contains("style") {
-        return "👗";
-    }
-    if n.contains("humor") || n.contains("юмор") || n.contains("comedy") || n.contains("комед")
-    {
-        return "😂";
-    }
-    if n.contains("horror") || n.contains("ужас") {
-        return "👻";
-    }
-    if n.contains("познав") || n.contains("develop") {
-        return "💡";
-    }
-    if n.contains("shop") || n.contains("магаз") || n.contains("телемаг") {
-        return "🛒";
-    }
-    if n.contains("radost") || n.contains("радост") {
-        return "🌈";
-    }
-    if n.contains("retro")
-        || n.contains("ретро")
-        || n.contains("classic")
-        || n.contains("классик")
-        || n.contains("совет")
-    {
-        return "📽 ";
-    }
-    if n.contains("hd") || n.contains("uhd") || n.contains("4k") {
-        return "📺";
+    for &(keywords, icon) in CATEGORY_ICONS {
+        if keywords.iter().any(|&k| {
+            if let Some(prefix) = k.strip_prefix('^') {
+                n.starts_with(prefix)
+            } else {
+                n.contains(k)
+            }
+        }) {
+            return icon;
+        }
     }
     "📂"
 }
+
+static RADIO_GENRE_ICONS: &[(&[&str], &str)] = &[
+    (&["bass", "dubstep", "drum", "dnb"], "🔊"),
+    (&["rock", "metal", "punk", "grunge"], "🎸"),
+    (&["pop", "dance", "disco"], "🎤"),
+    (&["jazz", "soul", "blues", "funk"], "🎷"),
+    (&["classic", "класси", "orchestra"], "🎻"),
+    (&["electro", "techno", "trance", "house", "edm"], "🎧"),
+    (&["hip", "rap", "trap", "phonk"], "🎤"),
+    (&["chill", "lounge", "ambient", "relax"], "🌊"),
+    (&["reggae", "ska", "dub"], "🌴"),
+    (&["country", "folk"], "🤠"),
+    (&["latin", "salsa", "reggaeton"], "💃"),
+    (&["russian", "русск", "рус"], "🇷🇺"),
+    (&["hit", "top", "best", "gold"], "🏆"),
+    (&["remix", "mashup", "mix"], "🔀"),
+    (&["retro", "80", "90", "70", "old"], "📼"),
+    (&["new", "fresh", "нов"], "✨"),
+    (&["deep"], "🌀"),
+    (&["pirate"], "🏴‍☠️"),
+    (&["summer"], "☀ "),
+    (&["party", "club", "superdiskoteka", "дискотека"], "🪩"),
+    (&["vip", "premium"], "💎"),
+    (&["record"], "⏺ "),
+    (&["chanson", "шансон"], "🎶"),
+    (&["naft", "нафт"], "💧"),
+    (&["big"], "🔥"),
+    (&["melodi", "мелоди"], "🎵"),
+    (&["humor", "юмор", "сказк", "comedy"], "😂"),
+];
 
 fn radio_genre_icon(name: &str) -> &'static str {
     let n = name.to_lowercase();
     if n == "all" {
         return "📻";
     }
-    if n.contains("bass") || n.contains("dubstep") || n.contains("drum") || n.contains("dnb") {
-        return "🔊";
-    }
-    if n.contains("rock") || n.contains("metal") || n.contains("punk") || n.contains("grunge") {
-        return "🎸";
-    }
-    if n.contains("pop") || n.contains("dance") || n.contains("disco") {
-        return "🎤";
-    }
-    if n.contains("jazz") || n.contains("soul") || n.contains("blues") || n.contains("funk") {
-        return "🎷";
-    }
-    if n.contains("classic") || n.contains("класси") || n.contains("orchestra") {
-        return "🎻";
-    }
-    if n.contains("electro")
-        || n.contains("techno")
-        || n.contains("trance")
-        || n.contains("house")
-        || n.contains("edm")
-    {
-        return "🎧";
-    }
-    if n.contains("hip") || n.contains("rap") || n.contains("trap") || n.contains("phonk") {
-        return "🎤";
-    }
-    if n.contains("chill") || n.contains("lounge") || n.contains("ambient") || n.contains("relax") {
-        return "🌊";
-    }
-    if n.contains("reggae") || n.contains("ska") || n.contains("dub") {
-        return "🌴";
-    }
-    if n.contains("country") || n.contains("folk") {
-        return "🤠";
-    }
-    if n.contains("latin") || n.contains("salsa") || n.contains("reggaeton") {
-        return "💃";
-    }
-    if n.contains("russian") || n.contains("русск") || n.contains("рус") {
-        return "🇷🇺";
-    }
-    if n.contains("hit") || n.contains("top") || n.contains("best") || n.contains("gold") {
-        return "🏆";
-    }
-    if n.contains("remix") || n.contains("mashup") || n.contains("mix") {
-        return "🔀";
-    }
-    if n.contains("retro")
-        || n.contains("80")
-        || n.contains("90")
-        || n.contains("70")
-        || n.contains("old")
-    {
-        return "📼";
-    }
-    if n.contains("new") || n.contains("fresh") || n.contains("нов") {
-        return "✨";
-    }
-    if n.contains("deep") {
-        return "🌀";
-    }
-    if n.contains("pirate") {
-        return "🏴‍☠️";
-    }
-    if n.contains("summer") {
-        return "☀ ";
-    }
-    if n.contains("party") || n.contains("club") {
-        return "🪩";
-    }
-    if n.contains("vip") || n.contains("premium") {
-        return "💎";
-    }
-    if n.contains("record") {
-        return "⏺ ";
-    }
-    if n.contains("chanson") || n.contains("шансон") {
-        return "🎶";
-    }
-    if n.contains("naft") || n.contains("нафт") {
-        return "💧";
-    }
-    if n.contains("big") {
-        return "🔥";
-    }
-    if n.contains("melodi") || n.contains("мелоди") {
-        return "🎵";
-    }
-    if n.contains("superdiskoteka") || n.contains("дискотека") {
-        return "🪩";
-    }
-    if n.contains("humor") || n.contains("юмор") || n.contains("сказк") || n.contains("comedy")
-    {
-        return "😂";
+    for &(keywords, icon) in RADIO_GENRE_ICONS {
+        if keywords.iter().any(|&k| n.contains(k)) {
+            return icon;
+        }
     }
     "🎵"
 }
@@ -356,7 +188,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let full_area = block.inner(size);
 
     // For TV — full-screen "now playing" overlay (mpv has a window, TUI is blocked)
-    if app.mpv_handle.is_some() && app.radio_ipc.is_none() {
+    if app.player.mpv_handle.is_some() && app.player.radio_ipc.is_none() {
         let text = "\n\n\n  ▶  NOW PLAYING\n\n  Press ESC to stop";
         f.render_widget(
             Paragraph::new(text)
@@ -372,7 +204,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     // The list area adapts: only RadioList and RadioCatList actually make sense above
     // the player, but other screens remain unaffected.
     let (content_area, radio_panel_area) =
-        if app.radio_ipc.is_some() && full_area.height > RADIO_PANEL_H + 3 {
+        if app.player.radio_ipc.is_some() && full_area.height > RADIO_PANEL_H + 3 {
             let chunks = Layout::default()
                 .constraints([Constraint::Min(3), Constraint::Length(RADIO_PANEL_H)])
                 .split(full_area);
@@ -719,7 +551,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     // Snapshot IPC state (lock once, release before rendering)
     let (paused, muted, volume, media_title, icy_name, meta_artist, meta_track, bitrate_kbps) = {
-        let st = app.radio_state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = app.player.radio_state.lock().unwrap_or_else(|e| e.into_inner());
         (
             st.paused,
             st.muted,
@@ -790,7 +622,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     let station_display = if !icy_name.is_empty() {
         sanitize(&icy_name)
     } else {
-        sanitize(&app.radio_station_title)
+        sanitize(&app.player.radio_station_title)
     };
     let inner_w = inner.width.saturating_sub(4) as usize;
     let station_w = inner_w.saturating_sub(4); // leave room for " ▶  " prefix
@@ -801,7 +633,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(status_color).bold(),
         ),
         Span::styled(
-            marquee_slice(&station_display, app.visuals.marquee_offset / 3, station_w),
+            marquee_slice(&station_display, app.player.visuals.marquee_offset / 3, station_w),
             Style::default()
                 .fg(Color::Rgb(0, 240, 255))
                 .add_modifier(Modifier::BOLD),
@@ -814,7 +646,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     let safe_artist = sanitize(&meta_artist);
     let safe_track = sanitize(&meta_track);
     let marquee_text = build_marquee_text(
-        &app.radio_station_title,
+        &app.player.radio_station_title,
         &safe_artist,
         &safe_track,
         &media_title,
@@ -824,7 +656,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(
             marquee_slice(
                 &marquee_text,
-                app.visuals.marquee_offset,
+                app.player.visuals.marquee_offset,
                 inner_w.saturating_sub(2),
             ),
             Style::default().fg(Color::Rgb(200, 220, 255)),
@@ -924,8 +756,8 @@ fn render_vu_meters(f: &mut Frame, app: &App, area: Rect) {
 
         let mut spans = vec![Span::raw(" ")];
         for i in 0..n_bars {
-            let h = app.visuals.vu_bars[i];
-            let peak = app.visuals.vu_peaks[i];
+            let h = app.player.visuals.vu_bars[i];
+            let peak = app.player.visuals.vu_peaks[i];
 
             // Peak indicator: show ▔ in the row where peak sits
             let peak_row_f = (1.0 - peak) * bar_h as f32;

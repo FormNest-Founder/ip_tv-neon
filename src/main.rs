@@ -19,6 +19,7 @@ mod consts;
 mod epg;
 mod models;
 mod mpv_ipc;
+mod player;
 mod ui;
 mod utils;
 
@@ -86,7 +87,7 @@ async fn main() -> Result<()> {
 
     loop {
         // ── Poll radio animation tick (20 FPS, only active during radio playback) ─
-        if app.radio_ipc.is_some() {
+        if app.player.radio_ipc.is_some() {
             tokio::select! {
                 biased;
                 _ = radio_interval.tick() => {
@@ -98,14 +99,14 @@ async fn main() -> Result<()> {
         }
 
         // ── Check if background MPV has exited ────────────────────────────────
-        if let Some(ref mut child) = app.mpv_handle {
+        if let Some(ref mut child) = app.player.mpv_handle {
             if let Ok(Some(_)) = child.try_wait() {
-                app.mpv_handle = None;
-                app.radio_ipc = None;
-                *app.radio_state
+                app.player.mpv_handle = None;
+                app.player.radio_ipc = None;
+                *app.player.radio_state
                     .lock()
                     .expect("radio_state poisoned in mpv exit") = mpv_ipc::RadioState::default();
-                app.radio_station_title.clear();
+                app.player.radio_station_title.clear();
                 app.needs_redraw = true;
             }
         }
@@ -210,7 +211,7 @@ async fn main() -> Result<()> {
 
         // ── Keyboard events ───────────────────────────────────────────────────
         // Use a short poll when radio is active (so animation keeps running)
-        let poll_timeout = if app.radio_ipc.is_some() {
+        let poll_timeout = if app.player.radio_ipc.is_some() {
             Duration::from_millis(16) // ~60fps poll, animation driven by radio_interval above
         } else {
             TICK_RATE.saturating_sub(last_tick.elapsed())
@@ -360,38 +361,38 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
     // Radio IPC controls — intercept only radio-specific keys.
     // Up/Down are NOT consumed here — they fall through to normal screen handlers
     // so the station list remains navigable while radio plays.
-    if app.radio_ipc.is_some() {
+    if app.player.radio_ipc.is_some() {
         let cur_vol = app
-            .radio_state
+            .player.radio_state
             .lock()
             .expect("radio_state poisoned in vol key")
             .volume;
         match key.code {
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                if let Some(ref ipc) = app.radio_ipc {
+                if let Some(ref ipc) = app.player.radio_ipc {
                     ipc.set_volume((cur_vol + 5.0).min(100.0));
                 }
                 return;
             }
             KeyCode::Char('-') => {
-                if let Some(ref ipc) = app.radio_ipc {
+                if let Some(ref ipc) = app.player.radio_ipc {
                     ipc.set_volume((cur_vol - 5.0).max(0.0));
                 }
                 return;
             }
             KeyCode::Char(' ') => {
-                if let Some(ref ipc) = app.radio_ipc {
+                if let Some(ref ipc) = app.player.radio_ipc {
                     ipc.toggle_pause();
                 }
                 return;
             }
             KeyCode::Char('m') => {
                 let muted = app
-                    .radio_state
+                    .player.radio_state
                     .lock()
                     .expect("radio_state poisoned in mute key")
                     .muted;
-                if let Some(ref ipc) = app.radio_ipc {
+                if let Some(ref ipc) = app.player.radio_ipc {
                     ipc.set_mute(!muted);
                 }
                 return;
@@ -405,249 +406,128 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
     }
 
     // TV/other mpv running — only Esc handled
-    if app.mpv_handle.is_some() {
+    if app.player.mpv_handle.is_some() {
         if key.code == KeyCode::Esc {
             app.stop_all();
         }
         return;
     }
 
-    match app.screen {
-        Screen::MainMenu => match key.code {
-            KeyCode::Up => {
-                app.status_msg = None;
-                nav_up(&mut app.nav.m_state, MENU_ITEMS);
+    let screen = app.screen;
+    match screen {
+        Screen::MainMenu => handle_main_menu_input(app, key.code).await,
+        Screen::Updating => {}
+        Screen::CatList => handle_cat_list_input(app, key.code),
+        Screen::ChanList => handle_chan_list_input(app, key.code),
+        Screen::RadioCatList => handle_radio_cat_list_input(app, key.code),
+        Screen::RadioList => handle_radio_list_input(app, key.code),
+        Screen::Favorites => handle_favorites_input(app, key.code),
+        Screen::History => handle_history_input(app, key.code),
+        Screen::Settings => handle_settings_input(app, key.code),
+        Screen::SettingsEdit(field) => handle_settings_edit_input(app, key.code, field),
+        Screen::Detail => handle_detail_input(app, key.code),
+        Screen::AiChat => {} // Handled in main loop
+        Screen::LocalList | Screen::LinkInput => {
+            if key.code == KeyCode::Esc {
+                app.screen = Screen::MainMenu;
             }
-            KeyCode::Down => {
-                app.status_msg = None;
-                nav_down(&mut app.nav.m_state, MENU_ITEMS);
+        }
+    }
+}
+
+async fn handle_main_menu_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => {
+            app.status_msg = None;
+            nav_up(&mut app.nav.m_state, MENU_ITEMS);
+        }
+        KeyCode::Down => {
+            app.status_msg = None;
+            nav_down(&mut app.nav.m_state, MENU_ITEMS);
+        }
+        KeyCode::Enter => match app.nav.m_state.selected().unwrap_or(0) {
+            0 => app.screen = Screen::CatList,
+            1 => app.screen = Screen::RadioCatList,
+            2 => {
+                let local_dir = app.config.local_dir.clone();
+                let files =
+                    tokio::task::spawn_blocking(move || scan_local_playlists(&local_dir))
+                        .await
+                        .unwrap_or_default();
+                app.local_files = files;
+                app.nav.d_state.select(Some(0));
+                app.screen = Screen::LocalList;
             }
-            KeyCode::Enter => match app.nav.m_state.selected().unwrap_or(0) {
-                0 => app.screen = Screen::CatList,
-                1 => app.screen = Screen::RadioCatList,
-                2 => {
-                    let local_dir = app.config.local_dir.clone();
-                    let files =
-                        tokio::task::spawn_blocking(move || scan_local_playlists(&local_dir))
-                            .await
-                            .unwrap_or_default();
-                    app.local_files = files;
-                    app.nav.d_state.select(Some(0));
-                    app.screen = Screen::LocalList;
-                }
-                3 => {
-                    app.ai.query.clear();
-                    app.ai.results.clear();
-                    app.ai.chat_history.clear();
-                    app.ai.focus_results = false;
-                    app.ai.chat_scroll = 0;
-                    app.screen = Screen::AiChat;
-                }
-                4 => {
-                    app.nav.fav_state.select(Some(0));
-                    app.screen = Screen::Favorites;
-                }
-                5 => {
-                    app.nav.hist_state.select(Some(0));
-                    app.screen = Screen::History;
-                }
-                6 => app.stop_all(),
-                7 => app.screen = Screen::Updating,
-                8 => {
-                    app.status_msg = None;
-                    app.screen = Screen::Settings;
-                }
-                9 => {
-                    app.stop_all();
-                    app.quit = true;
-                }
-                _ => {}
-            },
-            KeyCode::Esc => {
+            3 => {
+                app.ai.query.clear();
+                app.ai.results.clear();
+                app.ai.chat_history.clear();
+                app.ai.focus_results = false;
+                app.ai.chat_scroll = 0;
+                app.screen = Screen::AiChat;
+            }
+            4 => {
+                app.nav.fav_state.select(Some(0));
+                app.screen = Screen::Favorites;
+            }
+            5 => {
+                app.nav.hist_state.select(Some(0));
+                app.screen = Screen::History;
+            }
+            6 => app.stop_all(),
+            7 => app.screen = Screen::Updating,
+            8 => {
+                app.status_msg = None;
+                app.screen = Screen::Settings;
+            }
+            9 => {
                 app.stop_all();
                 app.quit = true;
             }
             _ => {}
         },
+        KeyCode::Esc => {
+            app.stop_all();
+            app.quit = true;
+        }
+        _ => {}
+    }
+}
 
-        Screen::Updating => {}
-
-        Screen::CatList => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.cat_state, app.data.groups.len()),
-            KeyCode::Down => nav_down(&mut app.nav.cat_state, app.data.groups.len()),
-            KeyCode::Enter => {
-                if let Some(idx) = app.nav.cat_state.selected() {
-                    if idx < app.data.groups.len() {
-                        app.nav.selected_group = app.data.groups[idx].clone();
-                        app.nav.search.clear();
-                        app.update_filter();
-                        app.screen = Screen::ChanList;
-                    }
+fn handle_cat_list_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.cat_state, app.data.groups.len()),
+        KeyCode::Down => nav_down(&mut app.nav.cat_state, app.data.groups.len()),
+        KeyCode::Enter => {
+            if let Some(idx) = app.nav.cat_state.selected() {
+                if idx < app.data.groups.len() {
+                    app.nav.selected_group = app.data.groups[idx].clone();
+                    app.nav.search.clear();
+                    app.update_filter();
+                    app.screen = Screen::ChanList;
                 }
             }
-            KeyCode::Esc => app.screen = Screen::MainMenu,
-            _ => {}
-        },
+        }
+        KeyCode::Esc => app.screen = Screen::MainMenu,
+        _ => {}
+    }
+}
 
-        Screen::ChanList => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.ch_state, app.nav.filtered.len()),
-            KeyCode::Down => nav_down(&mut app.nav.ch_state, app.nav.filtered.len()),
-            KeyCode::Enter => {
-                if let Some(idx) = app.nav.ch_state.selected() {
-                    if idx < app.nav.filtered.len() {
-                        app.open_detail(app.nav.filtered[idx]);
-                    }
+fn handle_chan_list_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.ch_state, app.nav.filtered.len()),
+        KeyCode::Down => nav_down(&mut app.nav.ch_state, app.nav.filtered.len()),
+        KeyCode::Enter => {
+            if let Some(idx) = app.nav.ch_state.selected() {
+                if idx < app.nav.filtered.len() {
+                    app.open_detail(app.nav.filtered[idx]);
                 }
             }
-            KeyCode::Char('f') => {
-                if let Some(idx) = app.nav.ch_state.selected() {
-                    if idx < app.nav.filtered.len() {
-                        let ch = &app.data.channels[app.nav.filtered[idx]];
-                        let url = ch.url.clone();
-                        let name = ch.name.clone();
-                        if app.config.favorites.contains(&url) {
-                            app.config.favorite_remove(&url);
-                        } else {
-                            app.config.favorite_add(&url, &name);
-                        }
-                    }
-                }
-            }
-            KeyCode::Char(c) => {
-                app.nav.search.push(c);
-                app.update_filter();
-            }
-            KeyCode::Backspace => {
-                app.nav.search.pop();
-                app.update_filter();
-            }
-            KeyCode::Esc => {
-                app.nav.search.clear();
-                app.screen = Screen::CatList;
-            }
-            _ => {}
-        },
-
-        Screen::RadioCatList => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.r_cat_state, app.data.radio_groups.len()),
-            KeyCode::Down => nav_down(&mut app.nav.r_cat_state, app.data.radio_groups.len()),
-            KeyCode::Enter => {
-                if let Some(idx) = app.nav.r_cat_state.selected() {
-                    if idx < app.data.radio_groups.len() {
-                        app.nav.selected_radio_genre = app.data.radio_groups[idx].clone();
-                        app.update_radio_filter();
-                        app.screen = Screen::RadioList;
-                    }
-                }
-            }
-            KeyCode::Esc => app.screen = Screen::MainMenu,
-            _ => {}
-        },
-
-        Screen::RadioList => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.r_state, app.nav.filtered_radio.len()),
-            KeyCode::Down => nav_down(&mut app.nav.r_state, app.nav.filtered_radio.len()),
-            KeyCode::Enter => {
-                if let Some(idx) = app.nav.r_state.selected() {
-                    if idx < app.nav.filtered_radio.len() {
-                        let (url, title, track) = {
-                            let st = &app.data.radio[app.nav.filtered_radio[idx]];
-                            (
-                                st.stream.clone(),
-                                st.title.clone(),
-                                st.track.clone().unwrap_or_default(),
-                            )
-                        };
-                        app.run_mpv(&url, &title, &track, true);
-                    }
-                }
-            }
-            KeyCode::Esc => app.screen = Screen::RadioCatList,
-            _ => {}
-        },
-
-        Screen::Favorites => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.fav_state, app.config.favorites.len()),
-            KeyCode::Down => nav_down(&mut app.nav.fav_state, app.config.favorites.len()),
-            KeyCode::Enter => {
-                if let Some(idx) = app.nav.fav_state.selected() {
-                    let favs = app.sorted_favorites();
-                    if idx < favs.len() {
-                        let url = favs[idx].clone();
-                        let name =
-                            ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
-                        app.run_mpv(&url, &name, "", false);
-                    }
-                }
-            }
-            KeyCode::Esc => app.screen = Screen::MainMenu,
-            _ => {}
-        },
-
-        Screen::History => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.hist_state, app.config.history.len()),
-            KeyCode::Down => nav_down(&mut app.nav.hist_state, app.config.history.len()),
-            KeyCode::Enter => {
-                if let Some(idx) = app.nav.hist_state.selected() {
-                    let history: Vec<_> = app.config.history.iter().rev().collect();
-                    if idx < history.len() {
-                        let url = history[idx].clone();
-                        let name =
-                            ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
-                        app.run_mpv(&url, &name, "", false);
-                    }
-                }
-            }
-            KeyCode::Esc => app.screen = Screen::MainMenu,
-            _ => {}
-        },
-
-        Screen::Settings => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.set_state, SETTINGS_COUNT),
-            KeyCode::Down => nav_down(&mut app.nav.set_state, SETTINGS_COUNT),
-            KeyCode::Enter => {
-                let idx = app.nav.set_state.selected().unwrap_or(0);
-                match idx {
-                    0 | 1 | 3 | 6 => {
-                        app.nav.edit_buf = app.settings_value(idx);
-                        app.screen = Screen::SettingsEdit(idx);
-                    }
-                    2 | 4 | 5 | 7 | 8 => {
-                        app.settings_toggle(idx);
-                    }
-                    _ => {}
-                }
-            }
-            KeyCode::Esc => app.screen = Screen::MainMenu,
-            _ => {}
-        },
-
-        Screen::SettingsEdit(field) => match key.code {
-            KeyCode::Char(c) => app.nav.edit_buf.push(c),
-            KeyCode::Backspace => {
-                app.nav.edit_buf.pop();
-            }
-            KeyCode::Enter => {
-                let val = app.nav.edit_buf.clone();
-                app.settings_apply(field, &val);
-                app.status_msg = Some("Saved".into());
-                app.screen = Screen::Settings;
-            }
-            KeyCode::Esc => {
-                app.nav.edit_buf.clear();
-                app.screen = Screen::Settings;
-            }
-            _ => {}
-        },
-
-        Screen::Detail => match key.code {
-            KeyCode::Up => nav_up(&mut app.nav.epg_state, app.detail.programs.len()),
-            KeyCode::Down => nav_down(&mut app.nav.epg_state, app.detail.programs.len()),
-            KeyCode::Enter => app.detail_play_selected(),
-            KeyCode::Char('l') => app.detail_play_live(),
-            KeyCode::Char('f') => {
-                if let Some(ch_idx) = app.detail.channel.filter(|&i| i < app.data.channels.len()) {
-                    let ch = &app.data.channels[ch_idx];
+        }
+        KeyCode::Char('f') => {
+            if let Some(idx) = app.nav.ch_state.selected() {
+                if idx < app.nav.filtered.len() {
+                    let ch = &app.data.channels[app.nav.filtered[idx]];
                     let url = ch.url.clone();
                     let name = ch.name.clone();
                     if app.config.favorites.contains(&url) {
@@ -657,19 +537,169 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                     }
                 }
             }
-            KeyCode::Esc => {
-                app.screen = app.detail.return_screen.take().unwrap_or(Screen::ChanList);
-            }
-            _ => {}
-        },
+        }
+        KeyCode::Char(c) => {
+            app.nav.search.push(c);
+            app.update_filter();
+        }
+        KeyCode::Backspace => {
+            app.nav.search.pop();
+            app.update_filter();
+        }
+        KeyCode::Esc => {
+            app.nav.search.clear();
+            app.screen = Screen::CatList;
+        }
+        _ => {}
+    }
+}
 
-        Screen::AiChat => {} // Handled in main loop
-
-        Screen::LocalList | Screen::LinkInput => {
-            if key.code == KeyCode::Esc {
-                app.screen = Screen::MainMenu;
+fn handle_radio_cat_list_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.r_cat_state, app.data.radio_groups.len()),
+        KeyCode::Down => nav_down(&mut app.nav.r_cat_state, app.data.radio_groups.len()),
+        KeyCode::Enter => {
+            if let Some(idx) = app.nav.r_cat_state.selected() {
+                if idx < app.data.radio_groups.len() {
+                    app.nav.selected_radio_genre = app.data.radio_groups[idx].clone();
+                    app.update_radio_filter();
+                    app.screen = Screen::RadioList;
+                }
             }
         }
+        KeyCode::Esc => app.screen = Screen::MainMenu,
+        _ => {}
+    }
+}
+
+fn handle_radio_list_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.r_state, app.nav.filtered_radio.len()),
+        KeyCode::Down => nav_down(&mut app.nav.r_state, app.nav.filtered_radio.len()),
+        KeyCode::Enter => {
+            if let Some(idx) = app.nav.r_state.selected() {
+                if idx < app.nav.filtered_radio.len() {
+                    let (url, title, track) = {
+                        let st = &app.data.radio[app.nav.filtered_radio[idx]];
+                        (
+                            st.stream.clone(),
+                            st.title.clone(),
+                            st.track.clone().unwrap_or_default(),
+                        )
+                    };
+                    app.run_mpv(&url, &title, &track, true);
+                }
+            }
+        }
+        KeyCode::Esc => app.screen = Screen::RadioCatList,
+        _ => {}
+    }
+}
+
+fn handle_favorites_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.fav_state, app.config.favorites.len()),
+        KeyCode::Down => nav_down(&mut app.nav.fav_state, app.config.favorites.len()),
+        KeyCode::Enter => {
+            if let Some(idx) = app.nav.fav_state.selected() {
+                let favs = app.sorted_favorites();
+                if idx < favs.len() {
+                    let url = favs[idx].clone();
+                    let name =
+                        ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
+                    app.run_mpv(&url, &name, "", false);
+                }
+            }
+        }
+        KeyCode::Esc => app.screen = Screen::MainMenu,
+        _ => {}
+    }
+}
+
+fn handle_history_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.hist_state, app.config.history.len()),
+        KeyCode::Down => nav_down(&mut app.nav.hist_state, app.config.history.len()),
+        KeyCode::Enter => {
+            if let Some(idx) = app.nav.hist_state.selected() {
+                let history: Vec<_> = app.config.history.iter().rev().collect();
+                if idx < history.len() {
+                    let url = history[idx].clone();
+                    let name =
+                        ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
+                    app.run_mpv(&url, &name, "", false);
+                }
+            }
+        }
+        KeyCode::Esc => app.screen = Screen::MainMenu,
+        _ => {}
+    }
+}
+
+fn handle_settings_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.set_state, SETTINGS_COUNT),
+        KeyCode::Down => nav_down(&mut app.nav.set_state, SETTINGS_COUNT),
+        KeyCode::Enter => {
+            let idx = app.nav.set_state.selected().unwrap_or(0);
+            match idx {
+                0 | 1 | 3 | 6 => {
+                    app.nav.edit_buf = app.settings_value(idx);
+                    app.screen = Screen::SettingsEdit(idx);
+                }
+                2 | 4 | 5 | 7 | 8 => {
+                    app.settings_toggle(idx);
+                }
+                _ => {}
+            }
+        }
+        KeyCode::Esc => app.screen = Screen::MainMenu,
+        _ => {}
+    }
+}
+
+fn handle_settings_edit_input(app: &mut App, code: KeyCode, field: usize) {
+    match code {
+        KeyCode::Char(c) => app.nav.edit_buf.push(c),
+        KeyCode::Backspace => {
+            app.nav.edit_buf.pop();
+        }
+        KeyCode::Enter => {
+            let val = app.nav.edit_buf.clone();
+            app.settings_apply(field, &val);
+            app.status_msg = Some("Saved".into());
+            app.screen = Screen::Settings;
+        }
+        KeyCode::Esc => {
+            app.nav.edit_buf.clear();
+            app.screen = Screen::Settings;
+        }
+        _ => {}
+    }
+}
+
+fn handle_detail_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => nav_up(&mut app.nav.epg_state, app.detail.programs.len()),
+        KeyCode::Down => nav_down(&mut app.nav.epg_state, app.detail.programs.len()),
+        KeyCode::Enter => app.detail_play_selected(),
+        KeyCode::Char('l') => app.detail_play_live(),
+        KeyCode::Char('f') => {
+            if let Some(ch_idx) = app.detail.channel.filter(|&i| i < app.data.channels.len()) {
+                let ch = &app.data.channels[ch_idx];
+                let url = ch.url.clone();
+                let name = ch.name.clone();
+                if app.config.favorites.contains(&url) {
+                    app.config.favorite_remove(&url);
+                } else {
+                    app.config.favorite_add(&url, &name);
+                }
+            }
+        }
+        KeyCode::Esc => {
+            app.screen = app.detail.return_screen.take().unwrap_or(Screen::ChanList);
+        }
+        _ => {}
     }
 }
 
