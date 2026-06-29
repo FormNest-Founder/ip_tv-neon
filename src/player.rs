@@ -237,7 +237,11 @@ impl PlayerController {
                 .arg("--hls-bitrate=max")
                 .arg("--demuxer-lavf-o=http_persistent=1")
                 .arg("--network-timeout=10")
-                .arg("--hwdec=auto")
+                // No --hwdec on the CLI: a CLI value overrides ~/.config/mpv/mpv.conf, which holds
+                // the platform-correct decoder (Vega 11 / RADV gfx902 needs hwdec=vaapi-copy; bare
+                // vaapi or auto pick a vulkan hwdec that crashes HEVC — see the mpv.conf comments).
+                // Deferring to mpv.conf is the real hardware decoupling; a machine without an
+                // mpv.conf falls back to mpv's safe software decode rather than a crash.
                 .arg("--vo=gpu-next")
                 .arg("--vd-lavc-threads=4");
 
