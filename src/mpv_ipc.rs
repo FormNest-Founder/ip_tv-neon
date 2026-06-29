@@ -35,6 +35,10 @@ pub type SharedRadioState = Arc<Mutex<RadioState>>;
 /// Returned by spawn_ipc_task — used to send commands to mpv.
 pub struct IpcHandle {
     tx: tokio::sync::mpsc::Sender<String>,
+    /// Aborts the background reader/writer task. Without this a stale task from a previous mpv
+    /// (still in its 2s connect-retry) could reconnect to a new mpv reusing the same PID-stable
+    /// socket path and split its property-change events, desyncing the UI after a fast switch.
+    abort: tokio::task::AbortHandle,
 }
 
 impl IpcHandle {
@@ -65,6 +69,11 @@ impl IpcHandle {
     pub fn quit(&self) {
         self.send_cmd(r#"{"command":["quit"]}"#.into());
     }
+
+    /// Stop the background IPC task immediately (teardown, before the socket path is reused).
+    pub fn abort(&self) {
+        self.abort.abort();
+    }
 }
 
 // ─── Background Task ─────────────────────────────────────────────────────────
@@ -77,7 +86,7 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
     let state_clone = state.clone();
 
-    tokio::spawn(async move {
+    let join = tokio::spawn(async move {
         // Wait for socket to appear
         let deadline = Instant::now() + Duration::from_secs(2);
         let stream = loop {
@@ -139,7 +148,7 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
         }
     });
 
-    IpcHandle { tx }
+    IpcHandle { tx, abort: join.abort_handle() }
 }
 
 // ─── Event Parser ─────────────────────────────────────────────────────────────

@@ -60,6 +60,7 @@ impl PlayerController {
     pub fn stop_all(&mut self) {
         if let Some(ref ipc) = self.radio_ipc {
             ipc.quit();
+            ipc.abort(); // stop the reader task so it can't reconnect to the next mpv on the reused socket
         }
         self.radio_ipc = None;
 
@@ -69,7 +70,7 @@ impl PlayerController {
         *self
             .radio_state
             .lock()
-            .expect("radio_state poisoned in stop_all") = RadioState::default();
+            .unwrap_or_else(|e| e.into_inner()) = RadioState::default();
         self.radio_station_title.clear();
         self.visuals.radio_start = None;
         self.visuals.vu_bars = [0.0; VU_BARS];
@@ -86,7 +87,7 @@ impl PlayerController {
             let st = self
                 .radio_state
                 .lock()
-                .expect("radio_state poisoned in tick_radio");
+                .unwrap_or_else(|e| e.into_inner());
             (st.paused, st.muted, st.volume)
         };
 
@@ -237,11 +238,13 @@ impl PlayerController {
                 .arg("--hls-bitrate=max")
                 .arg("--demuxer-lavf-o=http_persistent=1")
                 .arg("--network-timeout=10")
-                // No --hwdec on the CLI: a CLI value overrides ~/.config/mpv/mpv.conf, which holds
-                // the platform-correct decoder (Vega 11 / RADV gfx902 needs hwdec=vaapi-copy; bare
-                // vaapi or auto pick a vulkan hwdec that crashes HEVC — see the mpv.conf comments).
-                // Deferring to mpv.conf is the real hardware decoupling; a machine without an
-                // mpv.conf falls back to mpv's safe software decode rather than a crash.
+                // No --hwdec / --gpu-api on the CLI: both are platform-specific and live in
+                // ~/.config/mpv/mpv.conf (hwdec=vaapi-copy + gpu-api=vulkan on Vega 11 / RADV gfx902 —
+                // bare vaapi or hwdec=auto pick a vulkan decoder that crashes HEVC; gpu-api=vulkan also
+                // pins the backend so mpv never probes EGL, which disconnects this APU's display). A CLI
+                // value would OVERRIDE mpv.conf (the original Vega 11 crash) — deferring to it is the
+                // real hardware decoupling, and a machine without an mpv.conf falls back to mpv's safe
+                // software decode + default backend, not a crash. --vo=gpu-next is platform-agnostic, kept.
                 .arg("--vo=gpu-next")
                 .arg("--vd-lavc-threads=4");
 
