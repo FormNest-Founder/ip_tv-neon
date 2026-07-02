@@ -326,13 +326,15 @@ Read straight from the input handlers in `main.rs`.
 | Key | Action |
 |-----|--------|
 | `Enter` | Open the channel's detail/EPG screen |
-| `f` | Toggle favorite for the highlighted channel |
+| `f` | Toggle favorite (only while the search box is empty) |
+| `F` | Toggle favorite for the highlighted channel (always) |
 | *type letters* | Live search filter |
 | `Backspace` | Delete one search character |
 | `Esc` | Clear search, back to categories |
 
-> Note: in the channel list `f` always toggles favorite, so it can't be typed into the search box; every other
-> letter filters.
+> Note: lowercase `f` toggles the favorite only when the search box is empty; once you start typing, `f` goes into
+> the search text like any other letter. Uppercase `F` always toggles the favorite, so you can favorite a channel
+> mid-search. Text can also be pasted into the search box (bracketed paste).
 
 ### Detail / EPG screen
 | Key | Action |
@@ -452,7 +454,7 @@ user query ─→ LLM (DeepSeek | Gemini | AGY)  ── system: role preamble + 
 |------|--------------|
 | Async runtime | `tokio` |
 | TUI | `ratatui` + `crossterm` |
-| HTTP | `reqwest` |
+| HTTP | `reqwest` (rustls-tls only, no OpenSSL) |
 | XML | `quick-xml` |
 | Gzip | `flate2` |
 | Serialization | `bincode` (cache) + `serde`/`serde_json` (config) |
@@ -469,7 +471,9 @@ cargo test
 
 Covers keyword extraction, the model catalog (unique ids, cycle wrap, legacy/unknown resolution, agy resolver),
 EPG-search relevance (the genre-agnostic word-boundary fix and its collision classes), EPG id matching, config
-round-trip, and the cache version-prefix invariant.
+round-trip and corrupt-config backup, the cache version-prefix invariant, the M3U playlist parser (well-formed,
+malformed, EXTGRP ordering), the XMLTV EPG parser (missing stop, minutes-only and garbage timestamps),
+`parse_xml_time` variants, and the catch-up URL builder (with and without an existing query string).
 
 ## License
 

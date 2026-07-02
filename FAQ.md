@@ -188,6 +188,22 @@ affected by a cache bump.
 
 ---
 
+### My settings look reset and there's a `config.json.bak` — what happened?
+
+`config.json` failed to parse (hand-edited or truncated). Rather than silently discard it and overwrite your
+favorites/history on the next save, the app renames the bad file to `config.json.bak` and starts from defaults. Fix
+the JSON in the `.bak`, copy it back to `config.json`, and restart. The failure is also recorded in the log
+(`neon_iptv.log` in the cache dir).
+
+---
+
+### Terminal text selection / copy doesn't work while the app is open.
+
+It does now — mouse capture is disabled, so your terminal's native click-drag selection and copy work normally.
+Pasting into the search / settings / AI input boxes is also supported via bracketed paste.
+
+---
+
 ### If I add models, do I need to bump the cache version?
 
 No. The selected model is stored in `config.json` as `llm_provider: String` (a catalog id token), which doesn't
@@ -256,8 +272,9 @@ max-quality stream.
 
 ### How do favorites and history work?
 
-`f` toggles a favorite from the channel list or detail screen; favorites are a deduplicated set sorted by name.
-History keeps the **last 200** watched stream URLs, most-recent first, deduplicated. Both persist in `config.json`,
+`f` toggles a favorite from the detail screen, or from the channel list **while the search box is empty**; once you
+start typing a search, use uppercase `F` to toggle (lowercase `f` then goes into the search text). Favorites are a
+deduplicated set sorted by name. History keeps the **last 200** watched stream URLs, most-recent first, deduplicated. Both persist in `config.json`,
 along with a URL→name cache so they render even before a playlist is loaded. Clear either from Settings (*Clear
 History* / *Clear Favorites*).
 
@@ -266,5 +283,7 @@ History* / *Clear Favorites*).
 ### How do I play an archived (past) programme?
 
 On a channel with `tvg-rec` (archive) the detail screen shows past programmes marked `⏪`. Highlight one and press
-`Enter`: the app builds a catchup URL (`STREAM?utc=<start>&lutc=<stop>`) and plays it. `l` always plays the live
-edge regardless of selection. Channels without `tvg-rec` only play live.
+`Enter`: the app builds a catchup URL (`STREAM<sep>utc=<start>&lutc=<now>`, where `<sep>` is `?` for a plain URL or
+`&` when the stream URL already carries a query string, e.g. a token). `lutc` is the current live edge, not the
+programme stop — that is the flussonic convention. `l` always plays the live edge regardless of selection. Channels
+without `tvg-rec` only play live.
