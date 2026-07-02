@@ -132,6 +132,63 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
             .context("Failed to read local playlist")?
     };
 
+    let channels = parse_m3u(&m3u);
+
+    let groups: HashSet<String> = channels.iter().map(|ch| ch.group.clone()).collect();
+
+    let mut epg: HashMap<String, Vec<EpgProgram>> = HashMap::new();
+    let mut name_to_id: HashMap<String, String> = HashMap::new();
+
+    match client.get(&config.epg_url).send().await {
+        Ok(r) => match read_body_capped(r, MAX_EPG_DOWNLOAD_BYTES, "EPG").await {
+            Ok(b) => {
+                let epg_url_is_gz = config.epg_url.ends_with(".gz");
+                let (parsed_epg, parsed_name_to_id) =
+                    tokio::task::spawn_blocking(move || parse_epg(&b, epg_url_is_gz))
+                        .await
+                        .unwrap_or_default();
+                epg = parsed_epg;
+                name_to_id = parsed_name_to_id;
+            }
+            Err(e) => main_log(&format!("[epg] download rejected: {e}")),
+        },
+        Err(e) => main_log(&format!("[epg] fetch failed: {e}")),
+    }
+
+    for progs in epg.values_mut() {
+        progs.sort_by_key(|p| p.start);
+    }
+
+    let mut sorted_groups: Vec<String> = groups.into_iter().collect();
+    sorted_groups.sort();
+
+    let mut group_counts: HashMap<String, usize> = HashMap::new();
+    for ch in &channels {
+        *group_counts.entry(ch.group.clone()).or_insert(0) += 1;
+    }
+
+    let data = AppData {
+        channels,
+        radio,
+        radio_groups: r_groups,
+        groups: sorted_groups,
+        epg,
+        name_to_id,
+        group_counts,
+        ..Default::default()
+    };
+
+    save_data(data)?;
+    Ok(())
+}
+
+// ─── M3U Playlist Parser ──────────────────────────────────────────────────────
+
+/// Parse an M3U/M3U8 playlist body into channels. `#EXTINF` lines carry the
+/// tvg metadata + display name; the following `http(s)` line is the stream URL.
+/// `#EXTGRP` may precede or follow its `#EXTINF`. Channels left without a URL
+/// (malformed / trailing EXTINF) are dropped. Channel count is capped (CG2).
+fn parse_m3u(m3u: &str) -> Vec<Channel> {
     let mut channels: Vec<Channel> = Vec::new();
     let mut cur_grp = "Other".to_string();
     let mut pending_grp: Option<String> = None;
@@ -190,53 +247,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
 
     // Remove channels without URL
     channels.retain(|ch| !ch.url.is_empty());
-
-    let groups: HashSet<String> = channels.iter().map(|ch| ch.group.clone()).collect();
-
-    let mut epg: HashMap<String, Vec<EpgProgram>> = HashMap::new();
-    let mut name_to_id: HashMap<String, String> = HashMap::new();
-
-    match client.get(&config.epg_url).send().await {
-        Ok(r) => match read_body_capped(r, MAX_EPG_DOWNLOAD_BYTES, "EPG").await {
-            Ok(b) => {
-                let epg_url_is_gz = config.epg_url.ends_with(".gz");
-                let (parsed_epg, parsed_name_to_id) =
-                    tokio::task::spawn_blocking(move || parse_epg(&b, epg_url_is_gz))
-                        .await
-                        .unwrap_or_default();
-                epg = parsed_epg;
-                name_to_id = parsed_name_to_id;
-            }
-            Err(e) => main_log(&format!("[epg] download rejected: {e}")),
-        },
-        Err(e) => main_log(&format!("[epg] fetch failed: {e}")),
-    }
-
-    for progs in epg.values_mut() {
-        progs.sort_by_key(|p| p.start);
-    }
-
-    let mut sorted_groups: Vec<String> = groups.into_iter().collect();
-    sorted_groups.sort();
-
-    let mut group_counts: HashMap<String, usize> = HashMap::new();
-    for ch in &channels {
-        *group_counts.entry(ch.group.clone()).or_insert(0) += 1;
-    }
-
-    let data = AppData {
-        channels,
-        radio,
-        radio_groups: r_groups,
-        groups: sorted_groups,
-        epg,
-        name_to_id,
-        group_counts,
-        ..Default::default()
-    };
-
-    save_data(data)?;
-    Ok(())
+    channels
 }
 
 // ─── EPG XMLTV Parser ─────────────────────────────────────────────────────────
@@ -536,4 +547,133 @@ pub fn scan_local_playlists(custom_dir: &str) -> Vec<PathBuf> {
         }
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_epg, parse_m3u};
+
+    // ── M3U ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn m3u_wellformed_parses_metadata() {
+        let m3u = "\
+#EXTM3U
+#EXTINF:-1 tvg-id=\"bbc.one\" group-title=\"News\" tvg-rec=\"7\",BBC One
+http://host/bbc1
+#EXTINF:-1,Movie Ch
+http://host/movie
+";
+        let chans = parse_m3u(m3u);
+        assert_eq!(chans.len(), 2);
+        let bbc = &chans[0];
+        assert_eq!(bbc.name, "BBC One");
+        assert_eq!(bbc.group, "News");
+        assert_eq!(bbc.tvg_id.as_deref(), Some("bbc.one"));
+        assert_eq!(bbc.catchup_days, 7);
+        assert_eq!(bbc.url, "http://host/bbc1");
+        assert_eq!(bbc.name_lower, "bbc one");
+    }
+
+    #[test]
+    fn m3u_drops_extinf_without_url() {
+        let m3u = "\
+#EXTM3U
+#EXTINF:-1,Orphan No URL
+#EXTINF:-1,Has URL
+http://host/ok
+garbage line that is not a directive
+";
+        let chans = parse_m3u(m3u);
+        assert_eq!(chans.len(), 1);
+        assert_eq!(chans[0].name, "Has URL");
+    }
+
+    #[test]
+    fn m3u_extgrp_before_extinf_sets_group() {
+        let m3u = "\
+#EXTM3U
+#EXTGRP:Movies
+#EXTINF:-1,Film
+http://host/film
+";
+        let chans = parse_m3u(m3u);
+        assert_eq!(chans.len(), 1);
+        assert_eq!(chans[0].group, "Movies");
+    }
+
+    #[test]
+    fn m3u_empty_input_yields_no_channels() {
+        assert!(parse_m3u("").is_empty());
+        assert!(parse_m3u("not a playlist at all").is_empty());
+    }
+
+    // ── XMLTV EPG ────────────────────────────────────────────────────────
+
+    #[test]
+    fn epg_wellformed_parses_programme_and_channel_name() {
+        // Far-future times so they survive the "older than 1 day" cutoff.
+        let xml = "\
+<tv>
+  <channel id=\"ch1\"><display-name>BBC One</display-name></channel>
+  <programme start=\"20991231120000 +0000\" stop=\"20991231130000 +0000\" channel=\"ch1\">
+    <title>Evening News</title>
+    <desc>The day in review</desc>
+  </programme>
+</tv>";
+        let (epg, name_to_id) = parse_epg(xml.as_bytes(), false);
+        let progs = epg.get("ch1").expect("ch1 present");
+        assert_eq!(progs.len(), 1);
+        assert_eq!(progs[0].title, "Evening News");
+        assert_eq!(progs[0].desc, "The day in review");
+        assert_eq!(progs[0].stop - progs[0].start, 3600);
+        // display-name is normalized (lowercase alphanumerics) → channel id
+        assert_eq!(name_to_id.get("bbcone").map(String::as_str), Some("ch1"));
+    }
+
+    #[test]
+    fn epg_missing_stop_gets_default_slot() {
+        let xml = "\
+<tv>
+  <programme start=\"20991231120000 +0000\" channel=\"ch1\">
+    <title>No Stop Time</title>
+  </programme>
+</tv>";
+        let (epg, _) = parse_epg(xml.as_bytes(), false);
+        let progs = epg.get("ch1").expect("ch1 present");
+        assert_eq!(progs.len(), 1);
+        // Synthesized: stop == start + 3600 (DEFAULT_SLOT_SECS).
+        assert_eq!(progs[0].stop - progs[0].start, 3600);
+    }
+
+    #[test]
+    fn epg_minutes_only_time_is_kept() {
+        let xml = "\
+<tv>
+  <programme start=\"209912311200 +0000\" stop=\"209912311300 +0000\" channel=\"ch1\">
+    <title>Minutes Only</title>
+  </programme>
+</tv>";
+        let (epg, _) = parse_epg(xml.as_bytes(), false);
+        assert_eq!(epg.get("ch1").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn epg_garbage_start_is_dropped() {
+        let xml = "\
+<tv>
+  <programme start=\"not-a-time\" stop=\"also-bad\" channel=\"ch2\">
+    <title>Junk</title>
+  </programme>
+</tv>";
+        let (epg, _) = parse_epg(xml.as_bytes(), false);
+        assert!(!epg.contains_key("ch2"));
+    }
+
+    #[test]
+    fn epg_empty_input_is_empty() {
+        let (epg, name_to_id) = parse_epg(b"", false);
+        assert!(epg.is_empty());
+        assert!(name_to_id.is_empty());
+    }
 }

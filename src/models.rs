@@ -62,19 +62,22 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Self {
-        let p = get_config_json_path();
-        let raw = match fs::read_to_string(&p) {
+        Self::load_from(&get_config_json_path())
+    }
+
+    /// Load config from an explicit path. On a parse error the corrupt file is
+    /// renamed to `<name>.bak` (logged loudly) BEFORE falling back to Default, so
+    /// the next save() cannot silently overwrite the user's favorites/history.
+    pub fn load_from(path: &std::path::Path) -> Self {
+        let raw = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(_) => return Self::default(), // no file yet — first run
         };
         match serde_json::from_str(&raw) {
             Ok(cfg) => cfg,
             Err(e) => {
-                // A parse error would otherwise be silently mapped to Default and
-                // the next save() would overwrite the user's favorites/history.
-                // Preserve the bad file so it can be recovered manually (CG5).
-                let bak = p.with_extension("json.bak");
-                match fs::rename(&p, &bak) {
+                let bak = path.with_extension("json.bak");
+                match fs::rename(path, &bak) {
                     Ok(()) => main_log(&format!(
                         "[config] parse error ({e}) — corrupt config backed up to {}",
                         bak.display()

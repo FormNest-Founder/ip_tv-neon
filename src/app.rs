@@ -497,4 +497,18 @@ mod tests {
         assert!(url.ends_with(&format!("lutc={now}")));
         assert!(!url.contains(&format!("lutc={prog_stop}")));
     }
+
+    #[test]
+    fn archive_url_appends_with_question_mark_when_no_query() {
+        let url = build_archive_url("http://host/204/index.m3u8", 100, 200);
+        assert_eq!(url, "http://host/204/index.m3u8?utc=100&lutc=200");
+    }
+
+    #[test]
+    fn archive_url_uses_ampersand_when_query_present() {
+        // Tokenized URLs already carry `?token=…`; the extra params must be joined
+        // with `&`, not a second `?` that would corrupt the query string.
+        let url = build_archive_url("http://host/204/index.m3u8?token=abc", 100, 200);
+        assert_eq!(url, "http://host/204/index.m3u8?token=abc&utc=100&lutc=200");
+    }
 }

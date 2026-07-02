@@ -37,6 +37,9 @@ pub struct RadioVisuals {
     pub radio_start: Option<std::time::Instant>,
     pub marquee_offset: usize,
     pub marquee_tick: u32,
+    /// State for the tiny xorshift PRNG driving cosmetic VU noise (replaces the
+    /// `rand` crate — this noise has no cryptographic or statistical need).
+    rng_state: u32,
 }
 
 impl Default for RadioVisuals {
@@ -48,8 +51,19 @@ impl Default for RadioVisuals {
             radio_start: None,
             marquee_offset: 0,
             marquee_tick: 0,
+            rng_state: 0x9E37_79B9, // any non-zero seed
         }
     }
+}
+
+/// xorshift32 → f32 in [0, 1). Cosmetic only.
+fn xorshift_unit(state: &mut u32) -> f32 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    (x >> 8) as f32 / (1u32 << 24) as f32
 }
 
 pub struct PlayerController {
@@ -101,8 +115,6 @@ impl PlayerController {
     }
 
     pub fn tick_radio(&mut self) {
-        use rand::Rng;
-
         let (paused, muted, volume) = {
             let st = self
                 .radio_state
@@ -123,7 +135,6 @@ impl PlayerController {
             (volume as f32 / 100.0).clamp(0.0, 1.0)
         };
 
-        let mut rng = rand::thread_rng();
         for i in 0..VU_BARS {
             let pos = i as f32 / (VU_BARS - 1) as f32;
 
@@ -136,7 +147,7 @@ impl PlayerController {
             let bass = (t * 2.0 + i as f32 * 0.3).sin().abs();
             let mid = (t * 5.0 + i as f32 * 0.7).sin().abs() * 0.7;
             let hi = (t * 11.0 + i as f32 * 1.3).sin().abs() * 0.5;
-            let noise: f32 = rng.gen::<f32>() * 0.2;
+            let noise: f32 = xorshift_unit(&mut self.visuals.rng_state) * 0.2;
 
             let target = (bass * w_bass + mid * w_mid + hi * w_high + noise).min(1.0) * amp_scale;
 

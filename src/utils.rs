@@ -50,3 +50,53 @@ pub fn parse_xml_time(s: &str) -> i64 {
     }
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_xml_time;
+    use chrono::{DateTime, NaiveDateTime};
+
+    #[test]
+    fn parses_full_with_offset() {
+        let want = DateTime::parse_from_str("20240115123000 +0300", "%Y%m%d%H%M%S %z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(parse_xml_time("20240115123000 +0300"), want);
+    }
+
+    #[test]
+    fn parses_naive_seconds_as_utc() {
+        let want = NaiveDateTime::parse_from_str("20240115123000", "%Y%m%d%H%M%S")
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(parse_xml_time("20240115123000"), want);
+    }
+
+    #[test]
+    fn parses_minutes_only() {
+        let want = NaiveDateTime::parse_from_str("202401151230", "%Y%m%d%H%M")
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(parse_xml_time("202401151230"), want);
+        assert!(parse_xml_time("202401151230") > 0);
+    }
+
+    #[test]
+    fn parses_minutes_only_with_offset() {
+        assert!(parse_xml_time("202401151230 +0000") > 0);
+    }
+
+    #[test]
+    fn garbage_returns_zero() {
+        assert_eq!(parse_xml_time("not-a-time"), 0);
+        assert_eq!(parse_xml_time(""), 0);
+        assert_eq!(parse_xml_time("2024"), 0);
+    }
+
+    #[test]
+    fn trims_whitespace() {
+        assert!(parse_xml_time("  20240115123000  ") > 0);
+    }
+}
