@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -65,18 +65,23 @@ async fn main() -> Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            event::DisableBracketedPaste
+        );
         original_hook(info);
     }));
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        event::EnableBracketedPaste
-    )?;
+    // No EnableMouseCapture: there is no mouse handling, and capturing the mouse
+    // breaks the terminal's native text selection/copy.
+    execute!(stdout, EnterAlternateScreen, event::EnableBracketedPaste)?;
+    // RAII guard: restores the terminal on ANY exit path — normal return, an
+    // early `?` error, or a panic that unwinds past here.
+    let _guard = TerminalGuard;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(config);
     app.debug = debug;
@@ -223,7 +228,8 @@ async fn main() -> Result<()> {
         };
 
         if event::poll(poll_timeout)? {
-            if let Event::Key(key) = event::read()? {
+            match event::read()? {
+              Event::Key(key) => {
                 // AI chat needs http_client and ai_task — handle inline
                 let handled = match app.screen {
                     Screen::AiChat => {
@@ -318,22 +324,42 @@ async fn main() -> Result<()> {
                 if !handled {
                     handle_key(&mut app, key).await;
                 }
-                app.needs_redraw = true;
+              }
+              // Bracketed paste: route the pasted text into the active text buffer.
+              Event::Paste(data) => handle_paste(&mut app, &data),
+              // Resize / focus / mouse: no state change, just force a redraw below.
+              _ => {}
             }
+            // Any event (key, paste, resize, …) invalidates the frame.
+            app.needs_redraw = true;
         }
         if app.quit {
             break;
         }
     }
 
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        event::DisableBracketedPaste
-    )?;
+    // Terminal restoration is handled by `_guard` (TerminalGuard::drop).
     Ok(())
+}
+
+// ─── Terminal Restore Guard ──────────────────────────────────────────────────
+
+/// Restores the terminal to a sane state when dropped: leaves raw mode and the
+/// alternate screen and disables mouse capture / bracketed paste. Runs on every
+/// exit path (normal, early `?` error, or panic unwind), so the user is never
+/// left with a broken terminal.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            event::DisableBracketedPaste
+        );
+    }
 }
 
 // ─── Navigation Helpers ──────────────────────────────────────────────────────
@@ -352,6 +378,30 @@ fn nav_down(state: &mut ListState, len: usize) {
     }
     let i = state.selected().unwrap_or(0);
     state.select(Some(if i >= len - 1 { 0 } else { i + 1 }));
+}
+
+// ─── Paste Handling ──────────────────────────────────────────────────────────
+
+/// Route bracketed-paste text into whichever text buffer is currently active.
+/// Control characters (incl. newlines/ESC) are stripped so a pasted payload can
+/// neither break the single-line inputs nor smuggle terminal escapes.
+fn handle_paste(app: &mut App, data: &str) {
+    let clean: String = data.chars().filter(|c| !c.is_control()).collect();
+    if clean.is_empty() {
+        return;
+    }
+    match app.screen {
+        Screen::AiChat => {
+            app.ai.focus_results = false;
+            app.ai.query.push_str(&clean);
+        }
+        Screen::ChanList => {
+            app.nav.search.push_str(&clean);
+            app.update_filter();
+        }
+        Screen::SettingsEdit(_) => app.nav.edit_buf.push_str(&clean),
+        _ => {}
+    }
 }
 
 // ─── Key Handlers ────────────────────────────────────────────────────────────
@@ -532,7 +582,9 @@ fn handle_chan_list_input(app: &mut App, code: KeyCode) {
                 }
             }
         }
-        KeyCode::Char('f') => {
+        // Favorite toggle: uppercase 'F' always, lowercase 'f' only when the
+        // search box is empty — otherwise 'f' must reach the search text buffer.
+        KeyCode::Char(c @ ('f' | 'F')) if c == 'F' || app.nav.search.is_empty() => {
             if let Some(idx) = app.nav.ch_state.selected() {
                 if idx < app.nav.filtered.len() {
                     let ch = &app.data.channels[app.nav.filtered[idx]];
