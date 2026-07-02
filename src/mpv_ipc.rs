@@ -26,6 +26,10 @@ pub struct RadioState {
     pub muted: bool,
     /// Audio bitrate in kbps (0 = unknown)
     pub bitrate_kbps: u32,
+    /// True once the IPC reader task has connected to mpv's socket and subscribed
+    /// to properties. Stays false while connecting and if the connection failed,
+    /// so the UI can surface an "IPC not connected" state instead of a dead panel.
+    pub connected: bool,
 }
 
 pub type SharedRadioState = Arc<Mutex<RadioState>>;
@@ -87,8 +91,8 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
     let state_clone = state.clone();
 
     let join = tokio::spawn(async move {
-        // Wait for socket to appear
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // Wait for socket to appear (mpv opens it shortly after launch).
+        let deadline = Instant::now() + Duration::from_secs(5);
         let stream = loop {
             match UnixStream::connect(&socket_path).await {
                 Ok(s) => break Some(s),
@@ -103,7 +107,12 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
 
         let stream = match stream {
             Some(s) => s,
-            None => return, // socket never appeared — mpv probably failed
+            None => {
+                // Socket never appeared — mpv probably failed. Flag the failure so
+                // the UI shows "IPC not connected" rather than a live-looking panel.
+                state_clone.lock().unwrap_or_else(|e| e.into_inner()).connected = false;
+                return;
+            }
         };
 
         let (reader_half, mut writer) = stream.into_split();
@@ -121,9 +130,11 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
         for sub in &subs {
             let msg = format!("{}\n", sub);
             if writer.write_all(msg.as_bytes()).await.is_err() {
+                state_clone.lock().unwrap_or_else(|e| e.into_inner()).connected = false;
                 return;
             }
         }
+        state_clone.lock().unwrap_or_else(|e| e.into_inner()).connected = true;
 
         loop {
             tokio::select! {
@@ -131,8 +142,9 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
                 line = timeout(Duration::from_millis(500), lines.next_line()) => {
                     match line {
                         Ok(Ok(Some(text))) => handle_event(&text, &state_clone),
-                        Ok(Ok(None)) => break, // socket closed
-                        Ok(Err(_)) | Err(_) => {} // timeout or IO error — keep trying
+                        Ok(Ok(None)) => break,  // socket closed cleanly
+                        Ok(Err(_)) => break,    // real IO read error — stop, don't hot-loop
+                        Err(_) => {}            // read timeout — normal idle, keep polling
                     }
                 }
                 // Outgoing command from TUI

@@ -269,6 +269,10 @@ fn parse_epg(
     let mut cur_id = String::new();
     let mut cur_prog: Option<EpgProgram> = None;
     let mut programme_count = 0usize;
+    let mut dropped_count = 0usize;
+    // When a programme has no (or an unparseable) stop time, assume it runs for
+    // this long from its start rather than discarding it outright.
+    const DEFAULT_SLOT_SECS: i64 = 3600;
 
     #[derive(PartialEq)]
     enum XmlTag {
@@ -312,7 +316,12 @@ fn parse_epg(
                             _ => {}
                         }
                     }
-                    if stop > limit {
+                    // A missing/zero stop would otherwise drop the programme; if the
+                    // start is valid, synthesize a default-length slot instead.
+                    if stop == 0 && start > 0 {
+                        stop = start + DEFAULT_SLOT_SECS;
+                    }
+                    if stop > limit && start > 0 {
                         cur_prog = Some(EpgProgram {
                             start,
                             stop,
@@ -320,6 +329,8 @@ fn parse_epg(
                             desc: String::new(),
                         });
                         cur_id = ch_id;
+                    } else {
+                        dropped_count += 1;
                     }
                     tag = XmlTag::None;
                 }
@@ -385,6 +396,11 @@ fn parse_epg(
     if take.limit() == 0 {
         main_log(&format!(
             "[epg] decompressed-size cap {MAX_EPG_DECOMPRESSED_BYTES} reached — EPG truncated (possible bomb)"
+        ));
+    }
+    if dropped_count > 0 {
+        main_log(&format!(
+            "[epg] dropped {dropped_count} programme(s) with invalid/old start or stop time"
         ));
     }
     (epg_temp, name_to_id_temp)

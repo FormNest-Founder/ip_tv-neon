@@ -575,6 +575,20 @@ async fn chat_agy(
     prompt.push_str(user_msg);
     prompt.push_str("\nASSISTANT:");
 
+    // The agy CLI takes the prompt as a single argv value (`-p <prompt>`); it has
+    // no stdin prompt mode. A huge EPG context could blow the per-arg limit
+    // (E2BIG, MAX_ARG_STRLEN ≈ 128 KiB on Linux) and is visible in /proc/*/cmdline,
+    // so cap the flattened prompt well under that ceiling.
+    const AGY_PROMPT_CAP_BYTES: usize = 96 * 1024;
+    if prompt.len() > AGY_PROMPT_CAP_BYTES {
+        // Floor to a char boundary so we never split a multi-byte codepoint.
+        let mut end = AGY_PROMPT_CAP_BYTES;
+        while end > 0 && !prompt.is_char_boundary(end) {
+            end -= 1;
+        }
+        prompt.truncate(end);
+    }
+
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.args(["-p", &prompt, "--model", model, "--print-timeout", "90s"])
         .kill_on_drop(true)

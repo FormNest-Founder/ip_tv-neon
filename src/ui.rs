@@ -550,7 +550,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
 fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     // Snapshot IPC state (lock once, release before rendering)
-    let (paused, muted, volume, media_title, icy_name, meta_artist, meta_track, bitrate_kbps) = {
+    let (paused, muted, volume, media_title, icy_name, meta_artist, meta_track, bitrate_kbps, connected) = {
         let st = app.player.radio_state.lock().unwrap_or_else(|e| e.into_inner());
         (
             st.paused,
@@ -561,6 +561,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
             st.meta_artist.clone(),
             st.meta_track.clone(),
             st.bitrate_kbps,
+            st.connected,
         )
     };
 
@@ -619,7 +620,9 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
 
     // ── Station line ──────────────────────────────────────────────────────
     // Prefer icy-name from stream metadata, fall back to playlist title
-    let station_display = if !icy_name.is_empty() {
+    let station_display = if !connected {
+        "IPC not connected…".to_string()
+    } else if !icy_name.is_empty() {
         sanitize(&icy_name)
     } else {
         sanitize(&app.player.radio_station_title)
@@ -830,7 +833,10 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
         Some(i) => i,
         None => return,
     };
-    let ch = &app.data.channels[ch_idx];
+    let ch = match app.data.channels.get(ch_idx) {
+        Some(c) => c,
+        None => return, // channel list changed under us — nothing to render
+    };
     let now = Utc::now().timestamp();
     let (r, g, b) = app.config.theme_color;
     let theme = Color::Rgb(r, g, b);

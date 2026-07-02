@@ -63,10 +63,29 @@ impl Default for Config {
 impl Config {
     pub fn load() -> Self {
         let p = get_config_json_path();
-        fs::read_to_string(&p)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let raw = match fs::read_to_string(&p) {
+            Ok(s) => s,
+            Err(_) => return Self::default(), // no file yet — first run
+        };
+        match serde_json::from_str(&raw) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // A parse error would otherwise be silently mapped to Default and
+                // the next save() would overwrite the user's favorites/history.
+                // Preserve the bad file so it can be recovered manually (CG5).
+                let bak = p.with_extension("json.bak");
+                match fs::rename(&p, &bak) {
+                    Ok(()) => main_log(&format!(
+                        "[config] parse error ({e}) — corrupt config backed up to {}",
+                        bak.display()
+                    )),
+                    Err(re) => main_log(&format!(
+                        "[config] parse error ({e}) — FAILED to back up corrupt config: {re}"
+                    )),
+                }
+                Self::default()
+            }
+        }
     }
 
     pub fn save(&mut self) -> Result<()> {

@@ -43,9 +43,14 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let debug = args.iter().any(|a| a == "--debug");
 
+    // No total request timeout: the EPG body may be up to 128 MB and a total
+    // timeout (incl. body read) would abort a legitimate large download. Bound
+    // the connect phase and the idle-between-reads instead. AI calls set their
+    // own per-request .timeout(30s).
     let http_client = reqwest::Client::builder()
         .user_agent(consts::UA)
-        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
         .build()?;
 
     match args.get(1).map(|s| s.as_str()) {
@@ -105,7 +110,7 @@ async fn main() -> Result<()> {
                 app.player.radio_ipc = None;
                 *app.player.radio_state
                     .lock()
-                    .expect("radio_state poisoned in mpv exit") = mpv_ipc::RadioState::default();
+                    .unwrap_or_else(|e| e.into_inner()) = mpv_ipc::RadioState::default();
                 app.player.radio_station_title.clear();
                 app.needs_redraw = true;
             }
@@ -361,11 +366,14 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
     // Radio IPC controls — intercept only radio-specific keys.
     // Up/Down are NOT consumed here — they fall through to normal screen handlers
     // so the station list remains navigable while radio plays.
-    if app.player.radio_ipc.is_some() {
+    // Skip interception entirely in text-entry screens (channel search / settings
+    // edit) so Space/+/-/m/Esc reach the text buffer instead of the player.
+    let in_text_entry = matches!(app.screen, Screen::ChanList | Screen::SettingsEdit(_));
+    if app.player.radio_ipc.is_some() && !in_text_entry {
         let cur_vol = app
             .player.radio_state
             .lock()
-            .expect("radio_state poisoned in vol key")
+            .unwrap_or_else(|e| e.into_inner())
             .volume;
         match key.code {
             KeyCode::Char('+') | KeyCode::Char('=') => {
@@ -390,7 +398,7 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
                 let muted = app
                     .player.radio_state
                     .lock()
-                    .expect("radio_state poisoned in mute key")
+                    .unwrap_or_else(|e| e.into_inner())
                     .muted;
                 if let Some(ref ipc) = app.player.radio_ipc {
                     ipc.set_mute(!muted);

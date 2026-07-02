@@ -28,11 +28,24 @@ pub fn sanitize_terminal(s: &str) -> String {
         .collect()
 }
 
+/// Parse an XMLTV timestamp into a Unix epoch, or 0 if unrecognized.
+///
+/// Accepts, in order: `YYYYMMDDHHMMSS +ZZZZ` (with explicit offset),
+/// `YYYYMMDDHHMMSS` and `YYYYMMDDHHMM` (minutes-only). A timestamp without an
+/// explicit timezone offset is assumed to be naive UTC — XMLTV feeds without a
+/// `+ZZZZ` suffix are treated as UTC wall-clock here.
 pub fn parse_xml_time(s: &str) -> i64 {
+    let s = s.trim();
     if let Ok(dt) = DateTime::parse_from_str(s, "%Y%m%d%H%M%S %z") {
         return dt.timestamp();
     }
+    if let Ok(dt) = DateTime::parse_from_str(s, "%Y%m%d%H%M %z") {
+        return dt.timestamp();
+    }
     if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y%m%d%H%M%S") {
+        return dt.and_utc().timestamp();
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y%m%d%H%M") {
         return dt.and_utc().timestamp();
     }
     0

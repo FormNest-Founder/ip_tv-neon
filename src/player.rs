@@ -10,6 +10,26 @@ use tokio::process::{Child, Command};
 pub const VU_BARS: usize = 20;
 const PEAK_HOLD_TICKS: u32 = 10;
 
+/// Build a private, hard-to-guess path for the mpv IPC control socket.
+///
+/// Prefer `$XDG_RUNTIME_DIR` (a per-user 0700 tmpfs) so the control socket is not
+/// world-accessible; fall back to the app's own user-private cache dir, never the
+/// shared world-writable `/tmp`. A random-ish suffix (nanos + pid) avoids
+/// collisions and makes the path unpredictable to other local users.
+fn radio_socket_path() -> String {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(crate::consts::get_cache_dir);
+    let _ = std::fs::create_dir_all(&base);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    base.join(format!("neon-mpv-{}-{:x}.sock", std::process::id(), nanos))
+        .to_string_lossy()
+        .into_owned()
+}
+
 pub struct RadioVisuals {
     pub vu_bars: [f32; VU_BARS],
     pub vu_peaks: [f32; VU_BARS],
@@ -185,10 +205,7 @@ impl PlayerController {
         }
 
         if radio {
-            let sock = std::env::temp_dir()
-                .join(format!("neon-mpv-{}.sock", std::process::id()))
-                .to_string_lossy()
-                .to_string();
+            let sock = radio_socket_path();
             c.arg("--no-video")
                 .arg("--vo=null")
                 .arg("--force-window=no")

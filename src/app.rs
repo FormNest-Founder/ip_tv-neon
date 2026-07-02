@@ -89,7 +89,10 @@ pub fn is_http_url(url: &str) -> bool {
 /// uses it to anchor the catch-up window. Passing the program stop made the
 /// provider serve the live edge / an empty window instead of the past archive.
 fn build_archive_url(base: &str, utc: i64, lutc: i64) -> String {
-    format!("{base}?utc={utc}&lutc={lutc}")
+    // Tokenized stream URLs already carry a query string (`?token=…`); an
+    // unconditional `?` would corrupt them. Pick the correct separator.
+    let sep = if base.contains('?') { '&' } else { '?' };
+    format!("{base}{sep}utc={utc}&lutc={lutc}")
 }
 
 // ─── Constructor & Data Loading ──────────────────────────────────────────────
