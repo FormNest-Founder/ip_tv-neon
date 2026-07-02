@@ -45,6 +45,9 @@ pub struct NavState {
     pub epg_state: ListState,
     pub ai_state: ListState,
     pub filtered: Vec<usize>,
+    /// Scroll offset (first visible row) for the channel list, managed manually so
+    /// only the visible window of ListItems is built each frame.
+    pub ch_offset: usize,
     pub filtered_radio: Vec<usize>,
     pub selected_group: String,
     pub selected_radio_genre: String,
@@ -144,7 +147,12 @@ impl App {
             if self.config.channel_names.contains_key(url) {
                 continue;
             }
-            if let Some(ch) = self.data.channels.iter().find(|ch| ch.url == *url) {
+            if let Some(ch) = self
+                .data
+                .url_index
+                .get(url)
+                .and_then(|&i| self.data.channels.get(i))
+            {
                 self.config
                     .channel_names
                     .insert(url.clone(), ch.name.clone());

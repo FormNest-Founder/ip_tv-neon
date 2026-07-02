@@ -3,7 +3,7 @@
 use crate::app::App;
 use crate::player::VU_BARS;
 use crate::epg::get_current_epg;
-use crate::models::{Channel, Screen, SETTINGS_COUNT, SETTINGS_LABELS};
+use crate::models::{Screen, SETTINGS_COUNT, SETTINGS_LABELS};
 use crate::utils::sanitize_terminal as sanitize;
 use chrono::Utc;
 use ratatui::{prelude::*, widgets::*};
@@ -26,10 +26,10 @@ const RADIO_PANEL_H: u16 = 13;
 
 pub fn get_name_by_url<'a>(
     url: &'a str,
-    channels: &'a [Channel],
+    data: &'a crate::models::AppData,
     config: &'a crate::models::Config,
 ) -> &'a str {
-    if let Some(ch) = channels.iter().find(|ch| ch.url == url) {
+    if let Some(ch) = data.url_index.get(url).and_then(|&i| data.channels.get(i)) {
         return ch.name.as_str();
     }
     config.channel_name(url)
@@ -312,9 +312,36 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .constraints([Constraint::Min(0), Constraint::Length(3)])
                 .split(content_area);
             let now = Utc::now().timestamp();
-            let items: Vec<ListItem> = app
+            // Render only the visible window: build ListItems just for
+            // filtered[offset..offset+height] instead of every filtered channel
+            // each frame. The scroll offset is managed manually to keep the
+            // selected row visible.
+            let total = app.nav.filtered.len();
+            let list_h = (chunks[0].height.saturating_sub(2)) as usize;
+            let selected = app
                 .nav
-                .filtered
+                .ch_state
+                .selected()
+                .unwrap_or(0)
+                .min(total.saturating_sub(1));
+            let offset = {
+                let mut cur = app.nav.ch_offset;
+                if selected < cur {
+                    cur = selected;
+                } else if list_h > 0 && selected >= cur + list_h {
+                    cur = selected + 1 - list_h;
+                }
+                let max_off = total.saturating_sub(list_h);
+                cur = cur.min(max_off);
+                app.nav.ch_offset = cur;
+                cur
+            };
+            let end = if list_h == 0 {
+                offset
+            } else {
+                (offset + list_h).min(total)
+            };
+            let items: Vec<ListItem> = app.nav.filtered[offset..end]
                 .iter()
                 .map(|&idx| {
                     let ch = &app.data.channels[idx];
@@ -363,7 +390,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
-            let title = format!(" {} ({}) ", app.nav.selected_group, app.nav.filtered.len());
+            let title = format!(" {} ({}) ", app.nav.selected_group, total);
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
                 .highlight_style(
@@ -372,7 +399,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         .fg(Color::Cyan)
                         .bold(),
                 );
-            f.render_stateful_widget(list, chunks[0], &mut app.nav.ch_state);
+            // Local state indexes into the sliced window (offset 0); the widget
+            // never needs to scroll because we already sliced to the viewport.
+            let mut view_state = ListState::default();
+            if total > 0 {
+                view_state.select(Some(selected - offset));
+            }
+            f.render_stateful_widget(list, chunks[0], &mut view_state);
             f.render_widget(
                 Paragraph::new(format!(" SEARCH: {}", app.nav.search)).block(
                     Block::default()
@@ -392,11 +425,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     let cnt = if g == "All" {
                         app.data.radio.len()
                     } else {
-                        app.data
-                            .radio
-                            .iter()
-                            .filter(|r| r.genres.contains(g))
-                            .count()
+                        app.data.radio_group_counts.get(g).copied().unwrap_or(0)
                     };
                     ListItem::new(format!("  {}  {} ({})", radio_genre_icon(g), g, cnt))
                         .style(Style::default().fg(theme))
@@ -453,7 +482,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let items: Vec<ListItem> = favs
                 .iter()
                 .map(|url| {
-                    let name = get_name_by_url(url, &app.data.channels, &app.config);
+                    let name = get_name_by_url(url, &app.data, &app.config);
                     ListItem::new(format!("  ⭐  {}", name)).style(Style::default().fg(theme))
                 })
                 .collect();
@@ -475,7 +504,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .iter()
                 .rev()
                 .map(|url| {
-                    let name = get_name_by_url(url, &app.data.channels, &app.config);
+                    let name = get_name_by_url(url, &app.data, &app.config);
                     ListItem::new(format!("  🕐  {}", name)).style(Style::default().fg(theme))
                 })
                 .collect();

@@ -324,7 +324,7 @@ pub fn build_context(data: &AppData, config_history: &[String], channels: &[Chan
         let mut seen = std::collections::HashSet::new();
         let mut count = 0;
         for url in config_history.iter().rev() {
-            if let Some(ch) = channels.iter().find(|c| c.url == *url) {
+            if let Some(ch) = data.url_index.get(url).and_then(|&i| channels.get(i)) {
                 if seen.insert(&ch.name) {
                     ctx.push_str(&ch.name);
                     ctx.push('\n');

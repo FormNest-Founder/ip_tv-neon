@@ -666,7 +666,7 @@ fn handle_favorites_input(app: &mut App, code: KeyCode) {
                 if idx < favs.len() {
                     let url = favs[idx].clone();
                     let name =
-                        ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
+                        ui::get_name_by_url(&url, &app.data, &app.config).to_string();
                     app.run_mpv(&url, &name, "", false);
                 }
             }
@@ -686,7 +686,7 @@ fn handle_history_input(app: &mut App, code: KeyCode) {
                 if idx < history.len() {
                     let url = history[idx].clone();
                     let name =
-                        ui::get_name_by_url(&url, &app.data.channels, &app.config).to_string();
+                        ui::get_name_by_url(&url, &app.data, &app.config).to_string();
                     app.run_mpv(&url, &name, "", false);
                 }
             }

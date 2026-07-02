@@ -42,6 +42,7 @@ fn make_data(epg_keys: &[&str], name_to_id: &[(&str, &str)]) -> AppData {
         epg,
         name_to_id,
         group_counts: HashMap::new(),
+        ..Default::default()
     }
 }
 

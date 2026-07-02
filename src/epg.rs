@@ -232,6 +232,7 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
         epg,
         name_to_id,
         group_counts,
+        ..Default::default()
     };
 
     save_data(data)?;
@@ -448,7 +449,11 @@ pub fn load_data() -> AppData {
     }
 
     match bincode::deserialize::<CacheContainer>(&bytes) {
-        Ok(c) if c.version == CACHE_SCHEMA_VERSION => c.data,
+        Ok(c) if c.version == CACHE_SCHEMA_VERSION => {
+            let mut data = c.data;
+            data.build_indices();
+            data
+        }
         _ => {
             main_log("[cache] deserialize failed after version check — invalidating");
             let _ = std::fs::remove_file(&path);
@@ -491,13 +496,19 @@ pub fn find_epg_id(ch: &Channel, data: &AppData) -> Option<String> {
     data.name_to_id.get(&ch.norm_name).cloned()
 }
 
-pub fn get_current_epg(ch: &Channel, data: &AppData, now: i64) -> Option<EpgProgram> {
+/// Return the programme airing at `now` on `ch`, if any.
+///
+/// The per-channel programme list is sorted by `start` (see `update_data`), so a
+/// binary `partition_point` finds the last programme that started at or before
+/// `now` in O(log n) instead of a linear scan. That candidate is the only one
+/// that can contain `now` in a well-formed, non-overlapping schedule; it is
+/// returned by reference to avoid cloning on every render.
+pub fn get_current_epg<'a>(ch: &Channel, data: &'a AppData, now: i64) -> Option<&'a EpgProgram> {
     let id = find_epg_id(ch, data)?;
-    data.epg
-        .get(&id)?
-        .iter()
-        .find(|p| now >= p.start && now < p.stop)
-        .cloned()
+    let progs = data.epg.get(&id)?;
+    let idx = progs.partition_point(|p| p.start <= now);
+    let p = progs.get(idx.checked_sub(1)?)?;
+    (now >= p.start && now < p.stop).then_some(p)
 }
 
 // ─── Local Playlist Scanner ──────────────────────────────────────────────────

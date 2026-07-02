@@ -88,10 +88,24 @@ impl Config {
         }
     }
 
+    /// Durable save (fsync before rename) — use for favorites/settings changes.
     pub fn save(&mut self) -> Result<()> {
-        self.channel_names.retain(|url, _| {
-            self.history.contains(url) || self.favorites.contains(url)
-        });
+        self.save_inner(true)
+    }
+
+    /// Non-durable save (skips fsync) — used for high-frequency history-only
+    /// updates where a crash losing the very last watched entry is acceptable and
+    /// an fsync per channel change is not worth the I/O stall.
+    pub fn save_fast(&mut self) -> Result<()> {
+        self.save_inner(false)
+    }
+
+    fn save_inner(&mut self, durable: bool) -> Result<()> {
+        // O(n) prune: build a set of history URLs once instead of scanning the
+        // history Vec for every channel_names entry (was O(entries × history)).
+        let history_set: HashSet<&String> = self.history.iter().collect();
+        self.channel_names
+            .retain(|url, _| history_set.contains(url) || self.favorites.contains(url));
         use std::io::Write;
         let dir = get_config_dir();
         fs::create_dir_all(&dir)?;
@@ -105,7 +119,9 @@ impl Config {
                 .truncate(true)
                 .open(&tmp)?;
             f.write_all(serde_json::to_string_pretty(self)?.as_bytes())?;
-            f.sync_all()?;
+            if durable {
+                f.sync_all()?;
+            }
         }
         fs::rename(&tmp, &path)?;
         #[cfg(unix)]
@@ -125,7 +141,8 @@ impl Config {
         if !name.is_empty() {
             self.channel_names.insert(url.to_string(), name.to_string());
         }
-        if let Err(e) = self.save() {
+        // History is high-frequency and low-value on crash — skip fsync.
+        if let Err(e) = self.save_fast() {
             main_log(&format!("[config] save failed: {e}"));
         }
     }
@@ -200,6 +217,34 @@ pub struct AppData {
     pub name_to_id: HashMap<String, String>,
     #[serde(default)]
     pub group_counts: HashMap<String, usize>,
+    /// url → channel index, for O(1) reverse lookups. Derived state, never
+    /// persisted (rebuilt on load via `build_url_index`), so the on-disk cache
+    /// format is unchanged.
+    #[serde(skip)]
+    pub url_index: HashMap<String, usize>,
+    /// radio genre (uppercased) → station count, for the genre list. Derived,
+    /// not persisted.
+    #[serde(skip)]
+    pub radio_group_counts: HashMap<String, usize>,
+}
+
+impl AppData {
+    /// Rebuild the derived reverse-lookup indices after (de)serialization.
+    pub fn build_indices(&mut self) {
+        self.url_index = self
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(i, ch)| (ch.url.clone(), i))
+            .collect();
+        let mut radio_counts: HashMap<String, usize> = HashMap::new();
+        for st in &self.radio {
+            for g in &st.genres {
+                *radio_counts.entry(g.clone()).or_insert(0) += 1;
+            }
+        }
+        self.radio_group_counts = radio_counts;
+    }
 }
 
 #[derive(Serialize, Deserialize)]
