@@ -113,6 +113,35 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
         }
     }
 
+    let local_files = scan_local_playlists(&config.local_dir);
+    for path in local_files {
+        if path.file_name().unwrap_or_default().to_string_lossy().to_lowercase().contains("radio") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let parsed = parse_m3u(&content);
+                for ch in parsed {
+                    let mut genres = Vec::new();
+                    if !ch.group.is_empty() && ch.group != "Other" {
+                        genres.push(ch.group.clone());
+                        radio_genres.insert(ch.group.clone());
+                    } else {
+                        genres.push("Unknown".to_string());
+                        radio_genres.insert("Unknown".to_string());
+                    }
+                    
+                    radio.push(RadioStation {
+                        id: ch.name.clone(),
+                        title: ch.name.clone(),
+                        stream: ch.url.clone(),
+                        quality_urls: HashMap::new(),
+                        genres,
+                        provider: "Local".to_string(),
+                        track: None,
+                    });
+                }
+            }
+        }
+    }
+
     let mut r_groups: Vec<String> = radio_genres.into_iter().collect();
     r_groups.sort();
 
