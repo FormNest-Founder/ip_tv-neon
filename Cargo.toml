@@ -1,7 +1,7 @@
 [package]
 name = "ip_tv-neon"
 version = "0.9.1"
-edition = "2021"
+edition = "2024"
 description = "Terminal IPTV & Radio player with EPG, timeshift, and AI assistant"
 license = "MIT"
 readme = "README.md"

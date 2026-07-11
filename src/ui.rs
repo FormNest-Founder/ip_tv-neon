@@ -10,11 +10,11 @@ use ratatui::{prelude::*, widgets::*};
 
 // ─── Neon Palette ─────────────────────────────────────────────────────────────
 
-const NEON_CYAN: Color = Color::Rgb(0, 255, 229);
-const NEON_MAGENTA: Color = Color::Rgb(255, 0, 200);
-const NEON_YELLOW: Color = Color::Rgb(255, 220, 0);
+const NEON_CYAN: Color = Color::Rgb(0, 255, 255);
+const NEON_MAGENTA: Color = Color::Rgb(255, 0, 127);
+const NEON_YELLOW: Color = Color::Rgb(255, 255, 50);
 #[allow(dead_code)]
-const NEON_DIM: Color = Color::Rgb(40, 0, 60);
+const NEON_DIM: Color = Color::Rgb(10, 10, 15);
 
 // ─── Radio player height (compact, AIMP-style) ───────────────────────────────
 
@@ -181,9 +181,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let (r, g, b) = app.config.theme_color;
     let theme = Color::Rgb(r, g, b);
     let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" NIGHT CITY HUB ")
-        .border_style(Style::default().fg(theme));
+        .borders(Borders::ALL).border_type(BorderType::Rounded)
+        .title(" NIGHT CITY HUB ").padding(Padding::uniform(1))
+        .border_style(Style::default().fg(theme))
+        .style(Style::default().bg(NEON_DIM));
     f.render_widget(block.clone(), size);
     let full_area = block.inner(size);
 
@@ -300,7 +301,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .title(" 📺 Categories ")
-                        .borders(Borders::ALL)
+                        .borders(Borders::ALL).border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -392,7 +393,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .collect();
             let title = format!(" {} ({}) ", app.nav.selected_group, total);
             let list = List::new(items)
-                .block(Block::default().title(title).borders(Borders::ALL))
+                .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
                 .highlight_style(
                     Style::default()
                         .bg(Color::Rgb(0, 40, 40))
@@ -409,7 +410,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             f.render_widget(
                 Paragraph::new(format!(" SEARCH: {}", app.nav.search)).block(
                     Block::default()
-                        .borders(Borders::ALL)
+                        .borders(Borders::ALL).border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(Color::Yellow)),
                 ),
                 chunks[1],
@@ -435,7 +436,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .title(" 📻 Radio Genres ")
-                        .borders(Borders::ALL)
+                        .borders(Borders::ALL).border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -467,7 +468,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 app.nav.filtered_radio.len()
             );
             let list = List::new(items)
-                .block(Block::default().title(title).borders(Borders::ALL))
+                .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
                 .highlight_style(
                     Style::default()
                         .bg(Color::Rgb(0, 30, 0))
@@ -490,7 +491,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .title(" ⭐ Favorites ")
-                        .borders(Borders::ALL)
+                        .borders(Borders::ALL).border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -512,7 +513,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .title(" 🕐 History ")
-                        .borders(Borders::ALL)
+                        .borders(Borders::ALL).border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -545,7 +546,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .title(format!(" 📁 Local Playlists — {} ", dir_label))
-                        .borders(Borders::ALL)
+                        .borders(Borders::ALL).border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(theme)),
                 )
                 .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -617,7 +618,7 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
 
     // Outer neon border with title
     let outer = Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::ALL).border_type(BorderType::Rounded)
         .border_style(Style::default().fg(NEON_CYAN))
         .title(Line::from(vec![
             Span::styled(
@@ -907,7 +908,7 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(
             Paragraph::new("  No EPG data available")
                 .fg(Color::DarkGray)
-                .block(Block::default().title(" Programs ").borders(Borders::ALL)),
+                .block(Block::default().title(" Programs ").borders(Borders::ALL).border_type(BorderType::Rounded)),
             chunks[1],
         );
     } else {
@@ -963,7 +964,7 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
             " Programs ".to_string()
         };
         let list = List::new(items)
-            .block(Block::default().title(title).borders(Borders::ALL))
+            .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
             .highlight_style(
                 Style::default()
                     .bg(Color::Rgb(0, 40, 40))
@@ -993,7 +994,7 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
             .block(
                 Block::default()
                     .title(" Description ")
-                    .borders(Borders::ALL)
+                    .borders(Borders::ALL).border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(Color::DarkGray)),
             ),
         chunks[2],
@@ -1051,7 +1052,7 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
         .block(
             Block::default()
                 .title(" ⚙  Settings ")
-                .borders(Borders::ALL)
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -1067,7 +1068,7 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
     f.render_widget(
         Paragraph::new(hint).block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray)),
         ),
         chunks[1],
@@ -1099,7 +1100,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
             Paragraph::new(hint).fg(Color::DarkGray).block(
                 Block::default()
                     .title(" Results ")
-                    .borders(Borders::ALL)
+                    .borders(Borders::ALL).border_type(BorderType::Rounded)
                     .border_style(focus_border(false)),
             ),
             main_chunks[0],
@@ -1161,7 +1162,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         let results_block = Block::default()
             .title(title)
             .title_bottom(Line::from(" Enter: play | D: detail | Tab: chat ").fg(Color::DarkGray))
-            .borders(Borders::ALL)
+            .borders(Borders::ALL).border_type(BorderType::Rounded)
             .border_style(focus_border(app.ai.focus_results));
         let list = List::new(items).block(results_block).highlight_style(
             Style::default()
@@ -1230,7 +1231,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
             .block(
                 Block::default()
                     .title(" Chat ")
-                    .borders(Borders::ALL)
+                    .borders(Borders::ALL).border_type(BorderType::Rounded)
                     .border_style(focus_border(!app.ai.focus_results)),
             ),
         bottom_chunks[0],
@@ -1240,7 +1241,7 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
     f.render_widget(
         Paragraph::new(format!(" > {}", app.ai.query)).block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(input_border)),
         ),
         bottom_chunks[1],
