@@ -677,12 +677,24 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     // ── Track marquee: "Station │ Artist │ Track" ─────────────────────────
     // Build the composite marquee string from available metadata pieces.
     let safe_artist = sanitize(&meta_artist);
-    let safe_track = sanitize(&meta_track);
+    let mut safe_track = sanitize(&meta_track);
+    let safe_media_title = media_title.clone();
+
+    // FALLBACK: If stream metadata is empty (e.g. stripped bad JSON or missing),
+    // use the track fetched from the provider API if available.
+    if safe_artist.is_empty() && safe_track.is_empty() && safe_media_title.is_empty() {
+        if let Some(st) = app.data.radio.iter().find(|s| s.title == app.player.radio_station_title) {
+            if let Some(ref t) = st.track {
+                safe_track = sanitize(t);
+            }
+        }
+    }
+
     let marquee_text = build_marquee_text(
         &app.player.radio_station_title,
         &safe_artist,
         &safe_track,
-        &media_title,
+        &safe_media_title,
     );
     let track_line = Line::from(vec![
         Span::styled("  ", Style::default()),

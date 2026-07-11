@@ -205,7 +205,10 @@ fn handle_event(text: &str, state: &SharedRadioState) {
         }
         "media-title" => {
             if let Some(t) = data.as_str() {
-                st.media_title = t.to_string();
+                let t_trim = t.trim();
+                if !(t_trim.starts_with('{') && t_trim.ends_with('}')) {
+                    st.media_title = t.to_string();
+                }
             }
         }
         "metadata" => {
@@ -214,12 +217,44 @@ fn handle_event(text: &str, state: &SharedRadioState) {
                 st.icy_name = name.to_string();
             }
 
-            // Raw icy-title (usually "Artist - Track")
-            let raw_icy = data
+            let mut raw_icy = data
                 .get("icy-title")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
+                .trim()
                 .to_string();
+                
+            // FILTER: Misconfigured stations sometimes send raw JSON backend responses as icy-title.
+            // Let's try to extract artist/song from it before clearing it.
+            if raw_icy.starts_with('{') && raw_icy.ends_with('}') {
+                if let Ok(j) = serde_json::from_str::<serde_json::Value>(&raw_icy) {
+                    let mut ext_artist = "";
+                    let mut ext_title = "";
+                    
+                    // Check common nested structures, e.g., j["result"]["artist"]
+                    let track_obj = j.get("result").or(j.get("track")).unwrap_or(&j);
+                    
+                    if let Some(a) = track_obj.get("artist").and_then(|v| v.as_str()) {
+                        ext_artist = a;
+                    }
+                    if let Some(t) = track_obj.get("song").or(track_obj.get("title")).and_then(|v| v.as_str()) {
+                        ext_title = t;
+                    }
+                    
+                    if !ext_artist.is_empty() || !ext_title.is_empty() {
+                        if !ext_artist.is_empty() && !ext_title.is_empty() {
+                            raw_icy = format!("{} - {}", ext_artist, ext_title);
+                        } else {
+                            raw_icy = format!("{}{}", ext_artist, ext_title);
+                        }
+                    } else {
+                        raw_icy.clear();
+                    }
+                } else {
+                    raw_icy.clear();
+                }
+            }
+            
             st.icy_title = raw_icy.clone();
 
             // Prefer explicit artist/title tags if present

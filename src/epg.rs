@@ -95,12 +95,12 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
                     radio.push(RadioStation {
                         id: id_str.clone(),
                         title: sanitize_terminal(s["title"].as_str().unwrap_or("")),
-                        // stream_128 is the real 128 kbps max; stream_320 label
-                        // is misleading — radio-record.ru serves only 96 kbps on it.
-                        stream: s["stream_128"]
+                        stream: s["stream_320"]
                             .as_str()
-                            .or(s["stream_320"].as_str())
-                            .or(s["stream_hls"].as_str())
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| s["stream_128"].as_str().filter(|s| !s.is_empty()))
+                            .or_else(|| s["stream_64"].as_str().filter(|s| !s.is_empty()))
+                            .or_else(|| s["stream_hls"].as_str().filter(|s| !s.is_empty()))
                             .unwrap_or("")
                             .into(),
                         quality_urls,
@@ -513,10 +513,31 @@ pub async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String
             if let Some(st) = stations {
                 for s in st {
                     let id = s["id"].as_i64().unwrap_or(0).to_string();
-                    let artist = s["track"]["artist"].as_str().unwrap_or("");
-                    let song = s["track"]["song"].as_str().unwrap_or("");
+                    let mut artist = s["track"]["artist"].as_str().unwrap_or("").trim().to_string();
+                    let mut song = s["track"]["song"].as_str().unwrap_or("").trim().to_string();
+                    
+                    // FILTER: Misconfigured RadioRecord stations sometimes return double-encoded JSON
+                    // (a backend response string) in the artist field instead of the actual artist.
+                    if artist.starts_with('{') && artist.ends_with('}') {
+                        if let Ok(j) = serde_json::from_str::<serde_json::Value>(&artist) {
+                            let track_obj = j.get("result").or(j.get("track")).unwrap_or(&j);
+                            let ext_a = track_obj.get("artist").and_then(|v| v.as_str()).unwrap_or("");
+                            let ext_s = track_obj.get("song").or(track_obj.get("title")).and_then(|v| v.as_str()).unwrap_or("");
+                            if !ext_a.is_empty() || !ext_s.is_empty() {
+                                artist = ext_a.to_string();
+                                song = ext_s.to_string();
+                            } else {
+                                artist.clear(); // Clear the junk JSON if we couldn't parse it
+                            }
+                        } else {
+                            artist.clear();
+                        }
+                    }
+
                     if !artist.is_empty() {
                         map.insert(id, sanitize_terminal(&format!("{} - {}", artist, song)));
+                    } else if !song.is_empty() {
+                        map.insert(id, sanitize_terminal(&song));
                     }
                 }
             }

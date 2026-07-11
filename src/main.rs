@@ -463,10 +463,19 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
         }
     }
 
-    // TV/other mpv running — only Esc handled
+    // TV/other mpv running
     if app.player.mpv_handle.is_some() {
-        if key.code == KeyCode::Esc {
-            app.stop_all();
+        match key.code {
+            KeyCode::Esc => {
+                app.stop_all();
+            }
+            KeyCode::Up => switch_playing_channel(app, true),
+            KeyCode::Down => switch_playing_channel(app, false),
+            // When TV is playing, we want to allow volume controls as well (unless it's Radio where it's handled above)
+            KeyCode::Char('+') | KeyCode::Char('=') if app.player.radio_ipc.is_none() => {
+                // TV volume not strictly handled via IPC right now, but we ignore so it doesn't crash
+            }
+            _ => {}
         }
         return;
     }
@@ -778,4 +787,70 @@ fn diag() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn switch_playing_channel(app: &mut App, up: bool) {
+    match app.screen {
+        Screen::ChanList | Screen::Detail => {
+            if up {
+                nav_up(&mut app.nav.ch_state, app.nav.filtered.len());
+            } else {
+                nav_down(&mut app.nav.ch_state, app.nav.filtered.len());
+            }
+            if let Some(idx) = app.nav.ch_state.selected() {
+                if idx < app.nav.filtered.len() {
+                    let ch = &app.data.channels[app.nav.filtered[idx]];
+                    let url = ch.url.clone();
+                    let name = ch.name.clone();
+                    app.run_mpv(&url, &name, "", false);
+                }
+            }
+        }
+        Screen::RadioList => {
+            if up {
+                nav_up(&mut app.nav.r_state, app.nav.filtered_radio.len());
+            } else {
+                nav_down(&mut app.nav.r_state, app.nav.filtered_radio.len());
+            }
+            if let Some(idx) = app.nav.r_state.selected() {
+                if idx < app.nav.filtered_radio.len() {
+                    let st = &app.data.radio[app.nav.filtered_radio[idx]];
+                    let url = st.stream.clone();
+                    let name = st.title.clone();
+                    let track = st.track.clone().unwrap_or_default();
+                    app.run_mpv(&url, &name, &track, true);
+                }
+            }
+        }
+        Screen::Favorites => {
+            if up {
+                nav_up(&mut app.nav.fav_state, app.config.favorites.len());
+            } else {
+                nav_down(&mut app.nav.fav_state, app.config.favorites.len());
+            }
+            if let Some(idx) = app.nav.fav_state.selected() {
+                let favs = app.sorted_favorites();
+                if idx < favs.len() {
+                    let url = favs[idx].clone();
+                    let name = crate::ui::get_name_by_url(&url, &app.data, &app.config).to_string();
+                    app.run_mpv(&url, &name, "", false);
+                }
+            }
+        }
+        Screen::History => {
+            if up {
+                nav_up(&mut app.nav.hist_state, app.config.history.len());
+            } else {
+                nav_down(&mut app.nav.hist_state, app.config.history.len());
+            }
+            if let Some(idx) = app.nav.hist_state.selected() {
+                if idx < app.config.history.len() {
+                    let url = app.config.history[idx].clone();
+                    let name = crate::ui::get_name_by_url(&url, &app.data, &app.config).to_string();
+                    app.run_mpv(&url, &name, "", false);
+                }
+            }
+        }
+        _ => {}
+    }
 }
