@@ -264,9 +264,9 @@ window has nowhere to render. Forward a display or run on the machine attached t
 
 Track info comes from two sources: the Radio Record "now playing" API (the green text in the station list) and live
 mpv ICY metadata (`icy-name`, `icy-title`, `artist`/`title`) shown in the bottom player. If a station doesn't send
-ICY metadata, the panel falls back to the playlist title and mpv's best-guess `media-title`. Note also that Radio
-Record's `stream_320` label is misleading (it serves ~96 kbps), so the app uses `stream_128` as the real
-max-quality stream.
+ICY metadata (or if it sends malformed JSON which the app filters out), the panel falls back to the track fetched
+from the background API. Note also that Radio Record's `stream_128` often returns 404 on some stations, so the app
+now prefers `stream_320` (which is actually a stable AAC+ 96 kbps stream) as the real max-quality stream.
 
 ---
 
@@ -286,4 +286,10 @@ On a channel with `tvg-rec` (archive) the detail screen shows past programmes ma
 `Enter`: the app builds a catchup URL (`STREAM<sep>utc=<start>&lutc=<now>`, where `<sep>` is `?` for a plain URL or
 `&` when the stream URL already carries a query string, e.g. a token). `lutc` is the current live edge, not the
 programme stop — that is the flussonic convention. `l` always plays the live edge regardless of selection. Channels
-without `tvg-rec` only play live.
+without archive omit the `⏪` symbol.
+
+---
+
+### Can I change channels while a stream is playing?
+
+Yes! While you are watching a TV channel or listening to a Radio station, you can use the **Up (`↑`)** and **Down (`↓`)** arrow keys to instantly switch to the previous or next channel. The player will smoothly switch over without you needing to close the current stream first. This works across the TV, Radio, Favorites, and History lists.```

@@ -317,7 +317,7 @@ Read straight from the input handlers in `main.rs`.
 ### Global
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Move selection |
+| `↑` / `↓` | Move selection (if playing, switches channel immediately) |
 | `Enter` | Select / open / play |
 | `Esc` | Back one screen (or stop playback) |
 | `Ctrl+C` | Quit (from menus and lists) |
@@ -345,14 +345,13 @@ Read straight from the input handlers in `main.rs`.
 | `f` | Toggle favorite |
 | `Esc` | Back |
 
-### Radio (while a station plays)
+### Player Active (TV / Radio)
 | Key | Action |
 |-----|--------|
-| `Space` | Pause / resume |
-| `+` / `=` / `-` | Volume ±5 |
-| `m` | Mute / unmute |
-| `↑` / `↓` | Switch station (list stays live) |
-| `Enter` | Play the highlighted station |
+| `↑` / `↓` | Switch to previous / next channel instantly |
+| `Space` | Pause / resume (Radio only) |
+| `+` / `=` / `-` | Volume ±5 (Radio only) |
+| `m` | Mute / unmute (Radio only) |
 | `Esc` | Stop and close the player |
 
 ### AI Chat
