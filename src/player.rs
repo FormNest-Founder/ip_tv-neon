@@ -201,6 +201,7 @@ impl PlayerController {
         };
 
         let mut c = Command::new("mpv");
+        c.env("MESA_EXTENSION_OVERRIDE", "-GL_AMD_pinned_memory");
         c.arg(format!("--force-media-title={}", display_title))
             .arg("--volume=20")
             .arg("--no-ytdl");
@@ -273,7 +274,6 @@ impl PlayerController {
                 // value would OVERRIDE mpv.conf (the original Vega 11 crash) — deferring to it is the
                 // real hardware decoupling, and a machine without an mpv.conf falls back to mpv's safe
                 // software decode + default backend, not a crash. --vo=gpu-next is platform-agnostic, kept.
-                .arg("--vo=gpu-next")
                 .arg("--vd-lavc-threads=4");
 
             if config.video_fullscreen {
