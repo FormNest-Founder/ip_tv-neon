@@ -203,6 +203,7 @@ impl PlayerController {
         let mut c = Command::new("mpv");
         c.env("MESA_EXTENSION_OVERRIDE", "-GL_AMD_pinned_memory");
         c.arg(format!("--force-media-title={}", display_title))
+            .arg(format!("--user-agent={}", crate::consts::UA))
             .arg("--volume=20")
             .arg("--no-ytdl");
 
