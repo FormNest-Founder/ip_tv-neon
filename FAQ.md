@@ -272,11 +272,11 @@ now prefers `stream_320` (which is actually a stable AAC+ 96 kbps stream) as the
 
 ### How do favorites and history work?
 
-`f` toggles a favorite from the detail screen, or from the channel list **while the search box is empty**; once you
-start typing a search, use uppercase `F` to toggle (lowercase `f` then goes into the search text). Favorites are a
-deduplicated set sorted by name. History keeps the **last 200** watched stream URLs, most-recent first, deduplicated. Both persist in `config.json`,
-along with a URL→name cache so they render even before a playlist is loaded. Clear either from Settings (*Clear
-History* / *Clear Favorites*).
+Favorites work for both TV channels and radio stations:
+- **TV Channels:** Press `f` (when search is empty) or `F` (always) on the channel list screen or details screen to toggle favorite status.
+- **Radio Stations:** Press `f` or `F` on the radio station list screen to toggle favorite status. Favorite radio stations display a yellow `★` in the list.
+
+Favorites are sorted by name, and history stores the last 200 watched stream URLs. Both are persisted in `config.json` with a URL→name cache. When playing back from history or favorites, the app automatically checks if the stream is radio or video, and launches the player with the correct mode (windowless with VU meters/marquee for radio, vs a normal video window for TV channels). Clear either list from Settings (*Clear History* / *Clear Favorites*).
 
 ---
 

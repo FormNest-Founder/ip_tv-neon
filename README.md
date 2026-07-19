@@ -336,6 +336,13 @@ Read straight from the input handlers in `main.rs`.
 > the search text like any other letter. Uppercase `F` always toggles the favorite, so you can favorite a channel
 > mid-search. Text can also be pasted into the search box (bracketed paste).
 
+### Radio list
+| Key | Action |
+|-----|--------|
+| `Enter` | Play the selected radio station |
+| `f` / `F` | Toggle favorite status of the radio station |
+| `Esc` | Back to radio genres |
+
 ### Detail / EPG screen
 | Key | Action |
 |-----|--------|
@@ -416,16 +423,16 @@ a day ago are dropped at parse time; the detail screen extends the window back b
 
 ```
 src/
-├── main.rs     721 lines   Event loop, decoupled screen-specific input controllers
-├── ui.rs      1220 lines   ratatui rendering — data-driven icons, screens, themes
-├── app.rs      489 lines   Domain App state, config, filters, search logic
-├── player.rs   273 lines   PlayerController: OS processes, mpv execution, IPC lifecycle
-├── ai.rs       849 lines   Model catalog, DeepSeek/Gemini/AGY backends, AI search
-├── epg.rs      512 lines   M3U/EPG/radio ingest, XMLTV parser, bincode cache
-├── mpv_ipc.rs  231 lines   mpv JSON IPC over Unix sockets
-├── models.rs   232 lines   Config, Channel, EpgProgram, AppData, Screen, ViewStates
+├── main.rs     908 lines   Event loop, decoupled screen-specific input controllers
+├── ui.rs      1332 lines   ratatui rendering — data-driven icons, screens, themes
+├── app.rs      518 lines   Domain App state, config, filters, search logic
+├── player.rs   342 lines   PlayerController: OS processes, mpv execution, IPC lifecycle
+├── ai.rs       873 lines   Model catalog, DeepSeek/Gemini/AGY backends, AI search
+├── epg.rs      753 lines   M3U/EPG/radio ingest, XMLTV parser, bincode cache
+├── mpv_ipc.rs  348 lines   mpv JSON IPC over Unix sockets
+├── models.rs   299 lines   Config, Channel, EpgProgram, AppData, Screen, ViewStates
 ├── consts.rs    64 lines   Versions, API endpoints, static UI data
-├── utils.rs     39 lines   normalize, XML time parse, terminal sanitizer, logging
+├── utils.rs    102 lines   normalize, XML time parse, terminal sanitizer, logging
 └── lib.rs        5 lines   Test surface (ai, consts, epg, models, utils)
 ```
 
