@@ -226,26 +226,31 @@ fn handle_event(text: &str, state: &SharedRadioState) {
                 
             // FILTER: Misconfigured stations sometimes send raw JSON backend responses as icy-title.
             // Let's try to extract artist/song from it before clearing it.
-            if raw_icy.starts_with('{') && raw_icy.ends_with('}') {
-                if let Ok(j) = serde_json::from_str::<serde_json::Value>(&raw_icy) {
-                    let mut ext_artist = "";
-                    let mut ext_title = "";
-                    
-                    // Check common nested structures, e.g., j["result"]["artist"]
-                    let track_obj = j.get("result").or(j.get("track")).unwrap_or(&j);
-                    
-                    if let Some(a) = track_obj.get("artist").and_then(|v| v.as_str()) {
-                        ext_artist = a;
-                    }
-                    if let Some(t) = track_obj.get("song").or(track_obj.get("title")).and_then(|v| v.as_str()) {
-                        ext_title = t;
-                    }
-                    
-                    if !ext_artist.is_empty() || !ext_title.is_empty() {
-                        if !ext_artist.is_empty() && !ext_title.is_empty() {
-                            raw_icy = format!("{} - {}", ext_artist, ext_title);
+            if raw_icy.starts_with('{') {
+                if let Some(last_brace_idx) = raw_icy.rfind('}') {
+                    let json_substring = &raw_icy[..=last_brace_idx];
+                    if let Ok(j) = serde_json::from_str::<serde_json::Value>(json_substring) {
+                        let mut ext_artist = "";
+                        let mut ext_title = "";
+                        
+                        // Check common nested structures, e.g., j["result"]["artist"]
+                        let track_obj = j.get("result").or(j.get("track")).unwrap_or(&j);
+                        
+                        if let Some(a) = track_obj.get("artist").and_then(|v| v.as_str()) {
+                            ext_artist = a;
+                        }
+                        if let Some(t) = track_obj.get("song").or(track_obj.get("title")).and_then(|v| v.as_str()) {
+                            ext_title = t;
+                        }
+                        
+                        if !ext_artist.is_empty() || !ext_title.is_empty() {
+                            if !ext_artist.is_empty() && !ext_title.is_empty() {
+                                raw_icy = format!("{} - {}", ext_artist, ext_title);
+                            } else {
+                                raw_icy = format!("{}{}", ext_artist, ext_title);
+                            }
                         } else {
-                            raw_icy = format!("{}{}", ext_artist, ext_title);
+                            raw_icy.clear();
                         }
                     } else {
                         raw_icy.clear();
@@ -274,6 +279,9 @@ fn handle_event(text: &str, state: &SharedRadioState) {
                     st.meta_artist.clear();
                     st.meta_track = raw_icy;
                 }
+            } else {
+                st.meta_artist.clear();
+                st.meta_track.clear();
             }
         }
         "audio-bitrate" => {
@@ -283,5 +291,58 @@ fn handle_event(text: &str, state: &SharedRadioState) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_filtering() {
+        let state = Arc::new(Mutex::new(RadioState::default()));
+
+        // Test case 1: Valid track-bearing JSON containing artist and title/song
+        let json_valid = r#"{"event":"property-change","name":"metadata","data":{"icy-title":"{\"artist\":\"Abba\",\"title\":\"Dancing Queen\"}"}}"#;
+        handle_event(json_valid, &state);
+        {
+            let st = state.lock().unwrap();
+            assert_eq!(st.meta_artist, "Abba");
+            assert_eq!(st.meta_track, "Dancing Queen");
+            assert_eq!(st.icy_title, "Abba - Dancing Queen");
+        }
+
+        // Test case 2: Status JSON with trailing characters (like Golden 70s)
+        let state2 = Arc::new(Mutex::new(RadioState::default()));
+        let json_status_trailing = r#"{"event":"property-change","name":"metadata","data":{"icy-title":"{\"status\":1,\"message\":\"Ok\",\"result\":\"Ok\",\"errorCode\":0}  0"}}"#;
+        handle_event(json_status_trailing, &state2);
+        {
+            let st = state2.lock().unwrap();
+            assert_eq!(st.meta_artist, "");
+            assert_eq!(st.meta_track, "");
+            assert_eq!(st.icy_title, "");
+        }
+
+        // Test case 3: Plain non-JSON text (standard track title)
+        let state3 = Arc::new(Mutex::new(RadioState::default()));
+        let plain_text = r#"{"event":"property-change","name":"metadata","data":{"icy-title":"Queen - Bohemian Rhapsody"}}"#;
+        handle_event(plain_text, &state3);
+        {
+            let st = state3.lock().unwrap();
+            assert_eq!(st.meta_artist, "Queen");
+            assert_eq!(st.meta_track, "Bohemian Rhapsody");
+            assert_eq!(st.icy_title, "Queen - Bohemian Rhapsody");
+        }
+
+        // Test case 4: Non-JSON plain text with no hyphen
+        let state4 = Arc::new(Mutex::new(RadioState::default()));
+        let plain_text_no_hyphen = r#"{"event":"property-change","name":"metadata","data":{"icy-title":"Golden 70s Station Announcement"}}"#;
+        handle_event(plain_text_no_hyphen, &state4);
+        {
+            let st = state4.lock().unwrap();
+            assert_eq!(st.meta_artist, "");
+            assert_eq!(st.meta_track, "Golden 70s Station Announcement");
+            assert_eq!(st.icy_title, "Golden 70s Station Announcement");
+        }
     }
 }
