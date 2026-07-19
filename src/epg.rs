@@ -49,6 +49,49 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
     main_log("Starting update_data...");
 
     let tracks_map = fetch_radio_now(client).await;
+    let (radio, radio_genres) = fetch_radio_stations(client, &tracks_map, config).await;
+    
+    let mut r_groups: Vec<String> = radio_genres.into_iter().collect();
+    r_groups.sort();
+
+    let channels = fetch_playlist(client, config).await?;
+    let groups: HashSet<String> = channels.iter().map(|ch| ch.group.clone()).collect();
+    
+    let mut sorted_groups: Vec<String> = groups.into_iter().collect();
+    sorted_groups.sort();
+
+    let mut group_counts: HashMap<String, usize> = HashMap::new();
+    for ch in &channels {
+        *group_counts.entry(ch.group.clone()).or_insert(0) += 1;
+    }
+
+    let (mut epg, name_to_id) = fetch_epg_data(client, config).await;
+
+    for progs in epg.values_mut() {
+        progs.sort_by_key(|p| p.start);
+    }
+
+    let data = AppData {
+        channels,
+        radio,
+        radio_groups: r_groups,
+        groups: sorted_groups,
+        epg,
+        name_to_id,
+        group_counts,
+        ..Default::default()
+    };
+
+    save_data(data)?;
+    Ok(())
+}
+
+/// Fetch radio stations from API and local files
+async fn fetch_radio_stations(
+    client: &reqwest::Client,
+    tracks_map: &HashMap<String, String>,
+    config: &Config,
+) -> (Vec<RadioStation>, HashSet<String>) {
     let mut radio = Vec::new();
     let mut radio_genres = HashSet::new();
     radio_genres.insert("All".to_string());
@@ -142,9 +185,11 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
         }
     }
 
-    let mut r_groups: Vec<String> = radio_genres.into_iter().collect();
-    r_groups.sort();
+    (radio, radio_genres)
+}
 
+/// Fetch and parse the main IPTV playlist
+async fn fetch_playlist(client: &reqwest::Client, config: &Config) -> Result<Vec<Channel>> {
     let m3u = if config.playlist_url.starts_with("http") {
         let resp = client
             .get(&config.playlist_url)
@@ -161,10 +206,14 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
             .context("Failed to read local playlist")?
     };
 
-    let channels = parse_m3u(&m3u);
+    Ok(parse_m3u(&m3u))
+}
 
-    let groups: HashSet<String> = channels.iter().map(|ch| ch.group.clone()).collect();
-
+/// Fetch and parse the EPG data
+async fn fetch_epg_data(
+    client: &reqwest::Client,
+    config: &Config,
+) -> (HashMap<String, Vec<EpgProgram>>, HashMap<String, String>) {
     let mut epg: HashMap<String, Vec<EpgProgram>> = HashMap::new();
     let mut name_to_id: HashMap<String, String> = HashMap::new();
 
@@ -184,33 +233,8 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
         Err(e) => main_log(&format!("[epg] fetch failed: {e}")),
     }
 
-    for progs in epg.values_mut() {
-        progs.sort_by_key(|p| p.start);
-    }
-
-    let mut sorted_groups: Vec<String> = groups.into_iter().collect();
-    sorted_groups.sort();
-
-    let mut group_counts: HashMap<String, usize> = HashMap::new();
-    for ch in &channels {
-        *group_counts.entry(ch.group.clone()).or_insert(0) += 1;
-    }
-
-    let data = AppData {
-        channels,
-        radio,
-        radio_groups: r_groups,
-        groups: sorted_groups,
-        epg,
-        name_to_id,
-        group_counts,
-        ..Default::default()
-    };
-
-    save_data(data)?;
-    Ok(())
+    (epg, name_to_id)
 }
-
 // ─── M3U Playlist Parser ──────────────────────────────────────────────────────
 
 /// Parse an M3U/M3U8 playlist body into channels. `#EXTINF` lines carry the

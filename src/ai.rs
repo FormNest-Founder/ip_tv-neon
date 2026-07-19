@@ -437,20 +437,13 @@ async fn chat_deepseek(
         messages,
         temperature: 0.7,
     };
-    let resp = client
-        .post("https://api.deepseek.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .timeout(std::time::Duration::from_secs(30))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, truncate_chars(&body, 200)));
-    }
+        let resp = execute_http_chat(
+        client,
+        "https://api.deepseek.com/v1/chat/completions",
+        ("Authorization", &format!("Bearer {}", api_key)),
+        &body,
+        "API error",
+    ).await?;
 
     let parsed: ApiResponse = resp
         .json()
@@ -507,28 +500,17 @@ async fn chat_gemini(
         },
     };
 
-    let url = format!(
+        let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
         model
     );
-    let resp = client
-        .post(&url)
-        .header("X-Goog-Api-Key", &api_key)
-        .timeout(std::time::Duration::from_secs(30))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Gemini API error {}: {}",
-            status,
-            truncate_chars(&body, 200)
-        ));
-    }
+    let resp = execute_http_chat(
+        client,
+        &url,
+        ("X-Goog-Api-Key", &api_key),
+        &body,
+        "Gemini API error",
+    ).await?;
 
     let parsed: GeminiResponse = resp
         .json()
@@ -860,4 +842,32 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
 
     results.truncate(100);
     results
+}
+
+
+/// Executes an HTTP request for the AI chat backends (DeepSeek and Gemini), handling timeouts, error formatting, and basic auth headers.
+async fn execute_http_chat<T: serde::Serialize>(
+    client: &Client,
+    url: &str,
+    auth_header: (&str, &str),
+    body: &T,
+    api_name: &str,
+) -> Result<reqwest::Response, String> {
+    let resp = client
+        .post(url)
+        .header(auth_header.0, auth_header.1)
+        .timeout(std::time::Duration::from_secs(30))
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let prefix = if api_name.is_empty() { "API error" } else { api_name };
+        return Err(format!("{} {}: {}", prefix, status, truncate_chars(&body, 200)));
+    }
+    
+    Ok(resp)
 }

@@ -176,12 +176,95 @@ impl PlayerController {
         }
     }
 
-    pub fn run_mpv(
+        /// Launches mpv for radio playback with IPC enabled
+    pub fn run_radio(
         &mut self,
         url: &str,
         title: &str,
         sub_title: &str,
-        radio: bool,
+        _config: &Config,
+        debug: bool,
+        status_msg: &mut Option<String>,
+    ) {
+        if !crate::app::is_http_url(url) {
+            let scheme = url.split(':').next().unwrap_or("?");
+            main_log(&format!("[security] blocked non-http media URL scheme: {scheme}"));
+            *status_msg = Some("Blocked: only http/https media URLs are allowed".into());
+            return;
+        }
+        self.stop_all();
+
+        let display_title = if sub_title.is_empty() {
+            title.to_string()
+        } else {
+            format!("{} | {}", title, sub_title)
+        };
+
+        let mut c = Command::new("mpv");
+        c.env("MESA_EXTENSION_OVERRIDE", "-GL_AMD_pinned_memory");
+        c.arg(format!("--force-media-title={}", display_title))
+            .arg(format!("--user-agent={}", crate::consts::UA))
+            .arg("--volume=20")
+            .arg("--no-ytdl");
+
+        if debug {
+            let mpv_log = std::env::temp_dir().join("neon_mpv.log");
+            c.arg(format!("--log-file={}", mpv_log.display()));
+            let safe_url = url.split('?').next().unwrap_or("(url)");
+            main_log(&format!(
+                "MPV launch: url={} radio=true title={}",
+                safe_url, display_title
+            ));
+        }
+
+        let sock = radio_socket_path();
+        c.arg("--no-video")
+            .arg("--vo=null")
+            .arg("--force-window=no")
+            .arg("--idle=yes")
+            .arg("--keep-open=yes")
+            .arg(format!("--input-ipc-server={}", sock));
+        c.arg("--").arg(url);
+        c.stdout(Stdio::null()).stdin(Stdio::null());
+        let err_log = std::env::temp_dir().join("neon_mpv_stderr.log");
+        match File::create(err_log) {
+            Ok(f) => {
+                c.stderr(Stdio::from(f));
+            }
+            Err(_) => {
+                c.stderr(Stdio::null());
+            }
+        }
+        #[cfg(unix)]
+        unsafe {
+            c.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        match c.spawn() {
+            Ok(child) => {
+                self.mpv_handle = Some(child);
+                let state = Arc::clone(&self.radio_state);
+                let handle = spawn_ipc_task(sock, state);
+                self.radio_ipc = Some(handle);
+                self.radio_station_title = title.to_string();
+                self.visuals.radio_start = Some(Instant::now());
+            }
+            Err(e) => {
+                *status_msg = Some(format!("MPV error: {}", e));
+            }
+        }
+    }
+
+    /// Launches mpv for video/TV playback
+    pub fn run_video(
+        &mut self,
+        url: &str,
+        title: &str,
+        sub_title: &str,
         config: &Config,
         debug: bool,
         status_msg: &mut Option<String>,
@@ -212,97 +295,47 @@ impl PlayerController {
             c.arg(format!("--log-file={}", mpv_log.display()));
             let safe_url = url.split('?').next().unwrap_or("(url)");
             main_log(&format!(
-                "MPV launch: url={} radio={} title={}",
-                safe_url, radio, display_title
+                "MPV launch: url={} radio=false title={}",
+                safe_url, display_title
             ));
         }
 
-        if radio {
-            let sock = radio_socket_path();
-            c.arg("--no-video")
-                .arg("--vo=null")
-                .arg("--force-window=no")
-                .arg("--idle=yes")
-                .arg("--keep-open=yes")
-                .arg(format!("--input-ipc-server={}", sock));
-            c.arg("--").arg(url);
-            c.stdout(Stdio::null()).stdin(Stdio::null());
-            let err_log = std::env::temp_dir().join("neon_mpv_stderr.log");
-            match File::create(err_log) {
-                Ok(f) => {
-                    c.stderr(Stdio::from(f));
-                }
-                Err(_) => {
-                    c.stderr(Stdio::null());
-                }
-            }
-            #[cfg(unix)]
-            unsafe {
-                c.pre_exec(|| {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-            match c.spawn() {
-                Ok(child) => {
-                    self.mpv_handle = Some(child);
-                    let state = Arc::clone(&self.radio_state);
-                    let handle = spawn_ipc_task(sock, state);
-                    self.radio_ipc = Some(handle);
-                    self.radio_station_title = title.to_string();
-                    self.visuals.radio_start = Some(Instant::now());
-                }
-                Err(e) => {
-                    *status_msg = Some(format!("MPV error: {}", e));
-                }
-            }
-        } else {
-            c.arg(format!("--title=NEON: {}", display_title))
-                .arg("--ontop")
-                .arg("--force-window=immediate")
-                .arg("--cache=yes")
-                .arg("--demuxer-max-bytes=1000MiB")
-                .arg("--demuxer-max-back-bytes=500MiB")
-                .arg("--hls-bitrate=max")
-                .arg("--demuxer-lavf-o=http_persistent=1")
-                .arg("--network-timeout=10")
-                // No --hwdec / --gpu-api on the CLI: both are platform-specific and live in
-                // ~/.config/mpv/mpv.conf (hwdec=vaapi-copy + gpu-api=vulkan on Vega 11 / RADV gfx902 —
-                // bare vaapi or hwdec=auto pick a vulkan decoder that crashes HEVC; gpu-api=vulkan also
-                // pins the backend so mpv never probes EGL, which disconnects this APU's display). A CLI
-                // value would OVERRIDE mpv.conf (the original Vega 11 crash) — deferring to it is the
-                // real hardware decoupling, and a machine without an mpv.conf falls back to mpv's safe
-                // software decode + default backend, not a crash. --vo=gpu-next is platform-agnostic, kept.
-                .arg("--vd-lavc-threads=4");
+        c.arg(format!("--title=NEON: {}", display_title))
+            .arg("--ontop")
+            .arg("--force-window=immediate")
+            .arg("--cache=yes")
+            .arg("--demuxer-max-bytes=1000MiB")
+            .arg("--demuxer-max-back-bytes=500MiB")
+            .arg("--hls-bitrate=max")
+            .arg("--demuxer-lavf-o=http_persistent=1")
+            .arg("--network-timeout=10")
+            .arg("--vd-lavc-threads=4");
 
-            if config.video_fullscreen {
-                c.arg("--fs");
-            } else {
-                c.arg("--no-keepaspect-window")
-                    .arg(format!("--geometry={}", config.video_geometry));
-            }
-            c.arg("--").arg(url);
-            c.stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .stdin(Stdio::null());
-            #[cfg(unix)]
-            unsafe {
-                c.pre_exec(|| {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-            match c.spawn() {
-                Ok(child) => {
-                    self.mpv_handle = Some(child);
+        if config.video_fullscreen {
+            c.arg("--fs");
+        } else {
+            c.arg("--no-keepaspect-window")
+                .arg(format!("--geometry={}", config.video_geometry));
+        }
+        c.arg("--").arg(url);
+        c.stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null());
+        #[cfg(unix)]
+        unsafe {
+            c.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
                 }
-                Err(e) => {
-                    *status_msg = Some(format!("MPV error: {}", e));
-                }
+                Ok(())
+            });
+        }
+        match c.spawn() {
+            Ok(child) => {
+                self.mpv_handle = Some(child);
+            }
+            Err(e) => {
+                *status_msg = Some(format!("MPV error: {}", e));
             }
         }
     }

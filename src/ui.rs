@@ -216,351 +216,19 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // ── Screen Dispatch ───────────────────────────────────────────────────
     match &app.screen {
-        Screen::Updating => {
-            let text = "\n\n  UPDATING DATA...\n  PLEASE WAIT...";
-            f.render_widget(
-                Paragraph::new(text)
-                    .alignment(Alignment::Center)
-                    .fg(Color::Yellow)
-                    .bold(),
-                content_area,
-            );
-        }
-
-        Screen::MainMenu => {
-            let has_status = app.status_msg.is_some();
-            let constraints = if has_status {
-                vec![
-                    Constraint::Length(10),
-                    Constraint::Min(0),
-                    Constraint::Length(3),
-                ]
-            } else {
-                vec![Constraint::Length(10), Constraint::Min(0)]
-            };
-            let chunks = Layout::default()
-                .constraints(constraints)
-                .split(content_area);
-            let version = env!("CARGO_PKG_VERSION");
-            let status = format!(
-                "   NEON HUB v{}\n   Channels: {}  Radio: {}",
-                version,
-                app.data.channels.len(),
-                app.data.radio.len()
-            );
-            f.render_widget(
-                Paragraph::new(status)
-                    .alignment(Alignment::Center)
-                    .fg(theme),
-                chunks[0],
-            );
-            let items = [
-                "  📺  IPTV",
-                "  📻  RADIO",
-                "  📁  LOCAL",
-                "  🤖  AI CHAT",
-                "  ⭐  FAVORITES",
-                "  🕐  HISTORY",
-                "  ⏹   STOP ALL",
-                "  🔄  UPDATE",
-                "  ⚙   SETTINGS",
-                "  🚪  EXIT",
-            ];
-            let list = List::new(items.map(|s| ListItem::new(s).style(Style::default().fg(theme))))
-                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, chunks[1], &mut app.nav.m_state);
-            if let Some(msg) = &app.status_msg {
-                let color = if msg.starts_with("Update failed") {
-                    Color::Red
-                } else {
-                    Color::Green
-                };
-                f.render_widget(
-                    Paragraph::new(format!(" {}", msg)).fg(color).block(
-                        Block::default()
-                            .borders(Borders::TOP)
-                            .border_style(Style::default().fg(Color::DarkGray)),
-                    ),
-                    chunks[2],
-                );
-            }
-        }
-
-        Screen::CatList => {
-            let items: Vec<ListItem> = app
-                .data
-                .groups
-                .iter()
-                .map(|g| {
-                    let cnt = app.data.group_counts.get(g).copied().unwrap_or(0);
-                    ListItem::new(format!("  {}  {} ({})", category_icon(g), g, cnt))
-                        .style(Style::default().fg(theme))
-                })
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .title(" 📺 Categories ")
-                        .borders(Borders::ALL).border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme)),
-                )
-                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.nav.cat_state);
-        }
-
-        Screen::ChanList => {
-            let chunks = Layout::default()
-                .constraints([Constraint::Min(0), Constraint::Length(3)])
-                .split(content_area);
-            let now = Utc::now().timestamp();
-            // Render only the visible window: build ListItems just for
-            // filtered[offset..offset+height] instead of every filtered channel
-            // each frame. The scroll offset is managed manually to keep the
-            // selected row visible.
-            let total = app.nav.filtered.len();
-            let list_h = (chunks[0].height.saturating_sub(2)) as usize;
-            let selected = app
-                .nav
-                .ch_state
-                .selected()
-                .unwrap_or(0)
-                .min(total.saturating_sub(1));
-            let offset = {
-                let mut cur = app.nav.ch_offset;
-                if selected < cur {
-                    cur = selected;
-                } else if list_h > 0 && selected >= cur + list_h {
-                    cur = selected + 1 - list_h;
-                }
-                let max_off = total.saturating_sub(list_h);
-                cur = cur.min(max_off);
-                app.nav.ch_offset = cur;
-                cur
-            };
-            let end = if list_h == 0 {
-                offset
-            } else {
-                (offset + list_h).min(total)
-            };
-            let items: Vec<ListItem> = app.nav.filtered[offset..end]
-                .iter()
-                .map(|&idx| {
-                    let ch = &app.data.channels[idx];
-                    let is_fav = app.config.favorites.contains(&ch.url);
-                    let has_archive = ch.catchup_days > 0;
-                    let mut spans: Vec<Span> = Vec::new();
-                    if is_fav {
-                        spans.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
-                    }
-                    if has_archive {
-                        spans.push(Span::styled(
-                            "⏪",
-                            Style::default().fg(Color::Rgb(100, 140, 255)),
-                        ));
-                    }
-                    if !is_fav && !has_archive {
-                        spans.push(Span::raw("  "));
-                    }
-                    spans.push(Span::styled(&ch.name, Style::default().fg(Color::White)));
-                    if let Some(p) = get_current_epg(ch, &app.data, now) {
-                        let pct = if p.stop > p.start {
-                            ((now - p.start) as f64 / (p.stop - p.start) as f64).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        };
-                        let filled = (pct * 12.0) as usize;
-                        let bar: String = (0..12)
-                            .map(|i| if i < filled { '▰' } else { '▱' })
-                            .collect();
-                        let bar_color = if pct < 0.3 {
-                            Color::Rgb(0, 200, 120)
-                        } else if pct < 0.7 {
-                            Color::Rgb(200, 200, 0)
-                        } else {
-                            Color::Rgb(255, 100, 60)
-                        };
-                        spans.push(Span::styled(
-                            format!("  {}", bar),
-                            Style::default().fg(bar_color),
-                        ));
-                        spans.push(Span::styled(
-                            format!(" {}", p.title),
-                            Style::default().fg(Color::Rgb(180, 140, 255)),
-                        ));
-                    }
-                    ListItem::new(Line::from(spans))
-                })
-                .collect();
-            let title = format!(" {} ({}) ", app.nav.selected_group, total);
-            let list = List::new(items)
-                .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
-                .highlight_style(
-                    Style::default()
-                        .bg(Color::Rgb(0, 40, 40))
-                        .fg(Color::Cyan)
-                        .bold(),
-                );
-            // Local state indexes into the sliced window (offset 0); the widget
-            // never needs to scroll because we already sliced to the viewport.
-            let mut view_state = ListState::default();
-            if total > 0 {
-                view_state.select(Some(selected - offset));
-            }
-            f.render_stateful_widget(list, chunks[0], &mut view_state);
-            f.render_widget(
-                Paragraph::new(format!(" SEARCH: {}", app.nav.search)).block(
-                    Block::default()
-                        .borders(Borders::ALL).border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(Color::Yellow)),
-                ),
-                chunks[1],
-            );
-        }
-
-        Screen::RadioCatList => {
-            let items: Vec<ListItem> = app
-                .data
-                .radio_groups
-                .iter()
-                .map(|g| {
-                    let cnt = if g == "All" {
-                        app.data.radio.len()
-                    } else {
-                        app.data.radio_group_counts.get(g).copied().unwrap_or(0)
-                    };
-                    ListItem::new(format!("  {}  {} ({})", radio_genre_icon(g), g, cnt))
-                        .style(Style::default().fg(theme))
-                })
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .title(" 📻 Radio Genres ")
-                        .borders(Borders::ALL).border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme)),
-                )
-                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.nav.r_cat_state);
-        }
-
-        Screen::RadioList => {
-            let items: Vec<ListItem> = app
-                .nav
-                .filtered_radio
-                .iter()
-                .map(|&idx| {
-                    let st = &app.data.radio[idx];
-                    let track = st.track.as_deref().unwrap_or("");
-                    let mut spans =
-                        vec![Span::styled(&st.title, Style::default().fg(Color::White))];
-                    if !track.is_empty() {
-                        spans.push(Span::styled(
-                            format!("  {}", track),
-                            Style::default().fg(Color::Green),
-                        ));
-                    }
-                    ListItem::new(Line::from(spans))
-                })
-                .collect();
-            let title = format!(
-                " Radio: {} ({}) ",
-                app.nav.selected_radio_genre,
-                app.nav.filtered_radio.len()
-            );
-            let list = List::new(items)
-                .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
-                .highlight_style(
-                    Style::default()
-                        .bg(Color::Rgb(0, 30, 0))
-                        .fg(Color::Green)
-                        .bold(),
-                );
-            f.render_stateful_widget(list, content_area, &mut app.nav.r_state);
-        }
-
-        Screen::Favorites => {
-            let favs = app.sorted_favorites();
-            let items: Vec<ListItem> = favs
-                .iter()
-                .map(|url| {
-                    let name = get_name_by_url(url, &app.data, &app.config);
-                    ListItem::new(format!("  ⭐  {}", name)).style(Style::default().fg(theme))
-                })
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .title(" ⭐ Favorites ")
-                        .borders(Borders::ALL).border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme)),
-                )
-                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.nav.fav_state);
-        }
-
-        Screen::History => {
-            let items: Vec<ListItem> = app
-                .config
-                .history
-                .iter()
-                .rev()
-                .map(|url| {
-                    let name = get_name_by_url(url, &app.data, &app.config);
-                    ListItem::new(format!("  🕐  {}", name)).style(Style::default().fg(theme))
-                })
-                .collect();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .title(" 🕐 History ")
-                        .borders(Borders::ALL).border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme)),
-                )
-                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.nav.hist_state);
-        }
-
-        Screen::Settings => {
-            render_settings(f, app, content_area, None);
-        }
-
-        Screen::SettingsEdit(field) => {
-            render_settings(f, app, content_area, Some(*field));
-        }
-
-        Screen::LocalList => {
-            let items: Vec<ListItem> = app
-                .local_files
-                .iter()
-                .map(|p| {
-                    ListItem::new(format!("  📄  {}", p.to_string_lossy()))
-                        .style(Style::default().fg(theme))
-                })
-                .collect();
-            let dir_label = if app.config.local_dir.is_empty() {
-                "~/".to_string()
-            } else {
-                app.config.local_dir.clone()
-            };
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .title(format!(" 📁 Local Playlists — {} ", dir_label))
-                        .borders(Borders::ALL).border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme)),
-                )
-                .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
-            f.render_stateful_widget(list, content_area, &mut app.nav.d_state);
-        }
-
-        Screen::Detail => {
-            render_detail(f, app, content_area);
-        }
-
-        Screen::AiChat => {
-            render_ai_chat(f, app, content_area, theme);
-        }
-
+        Screen::Updating => render_updating(f, content_area),
+        Screen::MainMenu => render_main_menu(f, app, content_area, theme),
+        Screen::CatList => render_cat_list(f, app, content_area, theme),
+        Screen::ChanList => render_chan_list(f, app, content_area),
+        Screen::RadioCatList => render_radio_cat_list(f, app, content_area, theme),
+        Screen::RadioList => render_radio_list(f, app, content_area),
+        Screen::Favorites => render_favorites(f, app, content_area, theme),
+        Screen::History => render_history(f, app, content_area, theme),
+        Screen::Settings => render_settings(f, app, content_area, None),
+        Screen::SettingsEdit(field) => render_settings(f, app, content_area, Some(*field)),
+        Screen::LocalList => render_local_list(f, app, content_area, theme),
+        Screen::Detail => render_detail(f, app, content_area),
+        Screen::AiChat => render_ai_chat(f, app, content_area, theme),
         Screen::LinkInput => {
             f.render_widget(
                 Paragraph::new("\n\n  Not yet implemented.\n  Press ESC to return.")
@@ -569,7 +237,6 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             );
         }
     }
-
     // ── Compact neon radio panel (bottom) ─────────────────────────────────
     if let Some(panel_area) = radio_panel_area {
         render_radio_panel(f, app, panel_area);
@@ -1324,3 +991,342 @@ mod tests {
     }
 }
 
+
+
+/// Renders the updating screen
+fn render_updating(f: &mut Frame, area: Rect) {
+    let text = "\n\n  UPDATING DATA...\n  PLEASE WAIT...";
+    f.render_widget(
+        Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .fg(Color::Yellow)
+            .bold(),
+        area,
+    );
+}
+
+/// Renders the main menu
+fn render_main_menu(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
+    let has_status = app.status_msg.is_some();
+    let constraints = if has_status {
+        vec![
+            Constraint::Length(10),
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ]
+    } else {
+        vec![Constraint::Length(10), Constraint::Min(0)]
+    };
+    let chunks = Layout::default()
+        .constraints(constraints)
+        .split(area);
+    let version = env!("CARGO_PKG_VERSION");
+    let status = format!(
+        "   NEON HUB v{}\n   Channels: {}  Radio: {}",
+        version,
+        app.data.channels.len(),
+        app.data.radio.len()
+    );
+    f.render_widget(
+        Paragraph::new(status)
+            .alignment(Alignment::Center)
+            .fg(theme),
+        chunks[0],
+    );
+    let items = [
+        "  📺  IPTV",
+        "  📻  RADIO",
+        "  📁  LOCAL",
+        "  🤖  AI CHAT",
+        "  ⭐  FAVORITES",
+        "  🕐  HISTORY",
+        "  ⏹   STOP ALL",
+        "  🔄  UPDATE",
+        "  ⚙   SETTINGS",
+        "  🚪  EXIT",
+    ];
+    let list = List::new(items.map(|s| ListItem::new(s).style(Style::default().fg(theme))))
+        .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+    f.render_stateful_widget(list, chunks[1], &mut app.nav.m_state);
+    if let Some(msg) = &app.status_msg {
+        let color = if msg.starts_with("Update failed") {
+            Color::Red
+        } else {
+            Color::Green
+        };
+        f.render_widget(
+            Paragraph::new(format!(" {}", msg)).fg(color).block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[2],
+        );
+    }
+}
+
+/// Renders the category list
+fn render_cat_list(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
+    let items: Vec<ListItem> = app
+        .data
+        .groups
+        .iter()
+        .map(|g| {
+            let cnt = app.data.group_counts.get(g).copied().unwrap_or(0);
+            ListItem::new(format!("  {}  {} ({})", category_icon(g), g, cnt))
+                .style(Style::default().fg(theme))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" 📺 Categories ")
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme)),
+        )
+        .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+    f.render_stateful_widget(list, area, &mut app.nav.cat_state);
+}
+
+/// Renders the channel list
+fn render_chan_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(area);
+    let now = Utc::now().timestamp();
+    let total = app.nav.filtered.len();
+    let list_h = (chunks[0].height.saturating_sub(2)) as usize;
+    let selected = app
+        .nav
+        .ch_state
+        .selected()
+        .unwrap_or(0)
+        .min(total.saturating_sub(1));
+    let offset = {
+        let mut cur = app.nav.ch_offset;
+        if selected < cur {
+            cur = selected;
+        } else if list_h > 0 && selected >= cur + list_h {
+            cur = selected + 1 - list_h;
+        }
+        let max_off = total.saturating_sub(list_h);
+        cur = cur.min(max_off);
+        app.nav.ch_offset = cur;
+        cur
+    };
+    let end = if list_h == 0 {
+        offset
+    } else {
+        (offset + list_h).min(total)
+    };
+    let items: Vec<ListItem> = app.nav.filtered[offset..end]
+        .iter()
+        .map(|&idx| {
+            let ch = &app.data.channels[idx];
+            let is_fav = app.config.favorites.contains(&ch.url);
+            let has_archive = ch.catchup_days > 0;
+            let mut spans: Vec<Span> = Vec::new();
+            if is_fav {
+                spans.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
+            }
+            if has_archive {
+                spans.push(Span::styled(
+                    "⏪",
+                    Style::default().fg(Color::Rgb(100, 140, 255)),
+                ));
+            }
+            if !is_fav && !has_archive {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(&ch.name, Style::default().fg(Color::White)));
+            if let Some(p) = get_current_epg(ch, &app.data, now) {
+                let pct = if p.stop > p.start {
+                    ((now - p.start) as f64 / (p.stop - p.start) as f64).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let filled = (pct * 12.0) as usize;
+                let bar: String = (0..12)
+                    .map(|i| if i < filled { '▰' } else { '▱' })
+                    .collect();
+                let bar_color = if pct < 0.3 {
+                    Color::Rgb(0, 200, 120)
+                } else if pct < 0.7 {
+                    Color::Rgb(200, 200, 0)
+                } else {
+                    Color::Rgb(255, 100, 60)
+                };
+                spans.push(Span::styled(
+                    format!("  {}", bar),
+                    Style::default().fg(bar_color),
+                ));
+                spans.push(Span::styled(
+                    format!(" {}", p.title),
+                    Style::default().fg(Color::Rgb(180, 140, 255)),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let title = format!(" {} ({}) ", app.nav.selected_group, total);
+    let list = List::new(items)
+        .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(0, 40, 40))
+                .fg(Color::Cyan)
+                .bold(),
+        );
+    let mut view_state = ListState::default();
+    if total > 0 {
+        view_state.select(Some(selected - offset));
+    }
+    f.render_stateful_widget(list, chunks[0], &mut view_state);
+    f.render_widget(
+        Paragraph::new(format!(" SEARCH: {}", app.nav.search)).block(
+            Block::default()
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        chunks[1],
+    );
+}
+
+/// Renders the radio category list
+fn render_radio_cat_list(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
+    let items: Vec<ListItem> = app
+        .data
+        .radio_groups
+        .iter()
+        .map(|g| {
+            let cnt = if g == "All" {
+                app.data.radio.len()
+            } else {
+                app.data.radio_group_counts.get(g).copied().unwrap_or(0)
+            };
+            ListItem::new(format!("  {}  {} ({})", radio_genre_icon(g), g, cnt))
+                .style(Style::default().fg(theme))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" 📻 Radio Genres ")
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme)),
+        )
+        .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+    f.render_stateful_widget(list, area, &mut app.nav.r_cat_state);
+}
+
+/// Renders the radio station list
+fn render_radio_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .nav
+        .filtered_radio
+        .iter()
+        .map(|&idx| {
+            let st = &app.data.radio[idx];
+            let is_fav = app.config.favorites.contains(&st.stream);
+            let track = st.track.as_deref().unwrap_or("");
+            let mut spans = Vec::new();
+            if is_fav {
+                spans.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
+            } else {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(&st.title, Style::default().fg(Color::White)));
+            if !track.is_empty() {
+                spans.push(Span::styled(
+                    format!("  {}", track),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let title = format!(
+        " Radio: {} ({}) ",
+        app.nav.selected_radio_genre,
+        app.nav.filtered_radio.len()
+    );
+    let list = List::new(items)
+        .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(0, 30, 0))
+                .fg(Color::Green)
+                .bold(),
+        );
+    f.render_stateful_widget(list, area, &mut app.nav.r_state);
+}
+
+/// Renders the favorites list
+fn render_favorites(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
+    let favs = app.sorted_favorites();
+    let items: Vec<ListItem> = favs
+        .iter()
+        .map(|url| {
+            let name = get_name_by_url(url, &app.data, &app.config);
+            ListItem::new(format!("  ⭐  {}", name)).style(Style::default().fg(theme))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" ⭐ Favorites ")
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme)),
+        )
+        .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+    f.render_stateful_widget(list, area, &mut app.nav.fav_state);
+}
+
+/// Renders the history list
+fn render_history(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
+    let items: Vec<ListItem> = app
+        .config
+        .history
+        .iter()
+        .rev()
+        .map(|url| {
+            let name = get_name_by_url(url, &app.data, &app.config);
+            ListItem::new(format!("  🕐  {}", name)).style(Style::default().fg(theme))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" 🕐 History ")
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme)),
+        )
+        .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+    f.render_stateful_widget(list, area, &mut app.nav.hist_state);
+}
+
+/// Renders the local playlists list
+fn render_local_list(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
+    let items: Vec<ListItem> = app
+        .local_files
+        .iter()
+        .map(|p| {
+            ListItem::new(format!("  📄  {}", p.to_string_lossy()))
+                .style(Style::default().fg(theme))
+        })
+        .collect();
+    let dir_label = if app.config.local_dir.is_empty() {
+        "~/".to_string()
+    } else {
+        app.config.local_dir.clone()
+    };
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(format!(" 📁 Local Playlists — {} ", dir_label))
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme)),
+        )
+        .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
+    f.render_stateful_widget(list, area, &mut app.nav.d_state);
+}

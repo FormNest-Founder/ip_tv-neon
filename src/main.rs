@@ -108,109 +108,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        // ── Check if background MPV has exited ────────────────────────────────
-        if let Some(ref mut child) = app.player.mpv_handle {
-            if let Ok(Some(_)) = child.try_wait() {
-                app.player.mpv_handle = None;
-                app.player.radio_ipc = None;
-                *app.player.radio_state
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = mpv_ipc::RadioState::default();
-                app.player.radio_station_title.clear();
-                app.needs_redraw = true;
-            }
-        }
-
-        // ── Async radio track fetch (non-blocking) ────────────────────────────
-        if matches!(app.screen, Screen::RadioCatList | Screen::RadioList)
-            && radio_tracks_dirty
-            && radio_task.is_none()
-        {
-            radio_tracks_dirty = false;
-            let client = http_client.clone();
-            radio_task = Some(tokio::spawn(async move { fetch_radio_now(&client).await }));
-        }
-        let radio_done = radio_task.as_ref().is_some_and(|t| t.is_finished());
-        if radio_done {
-            if let Some(task) = radio_task.take() {
-                if let Ok(tracks) = task.await {
-                    for st in &mut app.data.radio {
-                        if let Some(t) = tracks.get(&st.id) {
-                            st.track = Some(t.clone());
-                        }
-                    }
-                    app.needs_redraw = true;
-                }
-            }
-        }
-        if !matches!(app.screen, Screen::RadioCatList | Screen::RadioList) {
-            radio_tracks_dirty = true;
-        }
-
-        // ── AI task completion ────────────────────────────────────────────────
-        if ai_task.as_ref().is_some_and(|t| t.is_finished()) {
-            if let Some(task) = ai_task.take() {
-                match task.await {
-                    Ok(response) => {
-                        app.ai.chat_history.push(ai::ChatMsg {
-                            is_user: false,
-                            text: response.text,
-                        });
-                        if let Some(ref kw) = response.keywords {
-                            let now = chrono::Utc::now().timestamp();
-                            app.ai.results = ai::search_epg(&app.data, kw, now);
-                            app.nav.ai_state.select(if app.ai.results.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            });
-                            if !app.ai.results.is_empty() {
-                                app.ai.focus_results = true;
-                            }
-                        }
-                        app.ai.loading = false;
-                        app.ai.chat_scroll = 0;
-                        app.needs_redraw = true;
-                    }
-                    Err(e) => {
-                        app.ai.loading = false;
-                        app.status_msg = Some(format!("AI task failed: {}", e));
-                        app.needs_redraw = true;
-                    }
-                }
-            }
-        }
-
-        // ── Data update task ──────────────────────────────────────────────────
-        if matches!(app.screen, Screen::Updating) && update_task.is_none() {
-            let config = app.config.clone();
-            let client = http_client.clone();
-            update_task = Some(tokio::spawn(
-                async move { update_data(&config, &client).await },
-            ));
-        }
-        if update_task.as_ref().is_some_and(|t| t.is_finished()) {
-            if let Some(task) = update_task.take() {
-                match task.await {
-                    Ok(Ok(())) => {
-                        app.reload_data();
-                        let ch = app.data.channels.len();
-                        let rd = app.data.radio.len();
-                        let epg = app.data.epg.len();
-                        app.status_msg =
-                            Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
-                    }
-                    Ok(Err(e)) => {
-                        app.status_msg = Some(format!("Update failed: {}", e));
-                    }
-                    Err(e) => {
-                        app.status_msg = Some(format!("Update task panic: {}", e));
-                    }
-                }
-                app.screen = Screen::MainMenu;
-                app.needs_redraw = true;
-            }
-        }
+        handle_mpv_exit(&mut app);
+        handle_radio_fetch(&mut app, &http_client, &mut radio_tracks_dirty, &mut radio_task).await;
+        handle_ai_task(&mut app, &mut ai_task).await;
+        handle_update_task(&mut app, &http_client, &mut update_task).await;
 
         // ── Draw ──────────────────────────────────────────────────────────────
         if app.needs_redraw || last_tick.elapsed() >= TICK_RATE {
@@ -220,118 +121,14 @@ async fn main() -> Result<()> {
         }
 
         // ── Keyboard events ───────────────────────────────────────────────────
-        // Use a short poll when radio is active (so animation keeps running)
         let poll_timeout = if app.player.radio_ipc.is_some() {
-            Duration::from_millis(16) // ~60fps poll, animation driven by radio_interval above
+            Duration::from_millis(16)
         } else {
             TICK_RATE.saturating_sub(last_tick.elapsed())
         };
 
         if event::poll(poll_timeout)? {
-            match event::read()? {
-              Event::Key(key) => {
-                // AI chat needs http_client and ai_task — handle inline
-                let handled = match app.screen {
-                    Screen::AiChat => {
-                        if app.ai.focus_results {
-                            match key.code {
-                                KeyCode::Up => nav_up(&mut app.nav.ai_state, app.ai.results.len()),
-                                KeyCode::Down => {
-                                    nav_down(&mut app.nav.ai_state, app.ai.results.len())
-                                }
-                                KeyCode::Enter => app.ai_play_selected(),
-                                KeyCode::Char('d') => {
-                                    if let Some(idx) = app.nav.ai_state.selected() {
-                                        if idx < app.ai.results.len() {
-                                            app.open_detail(app.ai.results[idx].channel_idx);
-                                        }
-                                    }
-                                }
-                                KeyCode::Char(c)
-                                    if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                                {
-                                    app.ai.focus_results = false;
-                                    app.ai.query.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.ai.focus_results = false;
-                                }
-                                KeyCode::Tab => {
-                                    app.ai.focus_results = false;
-                                }
-                                KeyCode::Esc => {
-                                    app.ai.loading = false;
-                                    app.screen = Screen::MainMenu;
-                                }
-                                _ => {}
-                            }
-                        } else {
-                            match key.code {
-                                KeyCode::Char(c)
-                                    if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                                {
-                                    app.ai.query.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.ai.query.pop();
-                                }
-                                KeyCode::Enter
-                                    if !app.ai.query.is_empty()
-                                        && !app.ai.loading
-                                        && ai_task.is_none() =>
-                                {
-                                    let msg = app.ai.query.drain(..).collect::<String>();
-                                    app.ai.chat_history.push(ai::ChatMsg {
-                                        is_user: true,
-                                        text: msg.clone(),
-                                    });
-                                    app.ai.loading = true;
-                                    app.ai.chat_scroll = 0;
-                                    let client = http_client.clone();
-                                    let history = app.ai.chat_history.clone();
-                                    let context = ai::build_context(
-                                        &app.data,
-                                        &app.config.history,
-                                        &app.data.channels,
-                                    );
-                                    let choice =
-                                        ai::resolve_choice(&app.config.llm_provider);
-                                    ai_task = Some(tokio::spawn(async move {
-                                        ai::ai_chat(
-                                            &client,
-                                            &history[..history.len() - 1],
-                                            &msg,
-                                            &context,
-                                            choice,
-                                        )
-                                        .await
-                                    }));
-                                }
-                                KeyCode::Tab if !app.ai.results.is_empty() => {
-                                    app.ai.focus_results = true;
-                                }
-                                KeyCode::Esc => {
-                                    app.ai.loading = false;
-                                    app.screen = Screen::MainMenu;
-                                }
-                                _ => {}
-                            }
-                        }
-                        true
-                    }
-                    _ => false,
-                };
-                if !handled {
-                    handle_key(&mut app, key).await;
-                }
-              }
-              // Bracketed paste: route the pasted text into the active text buffer.
-              Event::Paste(data) => handle_paste(&mut app, &data),
-              // Resize / focus / mouse: no state change, just force a redraw below.
-              _ => {}
-            }
-            // Any event (key, paste, resize, …) invalidates the frame.
-            app.needs_redraw = true;
+            handle_input_event(&mut app, event::read()?, &mut ai_task, &http_client).await;
         }
         if app.quit {
             break;
@@ -340,6 +137,235 @@ async fn main() -> Result<()> {
 
     // Terminal restoration is handled by `_guard` (TerminalGuard::drop).
     Ok(())
+}
+
+/// Checks if the background MPV player has exited and cleans up IPC state.
+fn handle_mpv_exit(app: &mut App) {
+    if let Some(ref mut child) = app.player.mpv_handle {
+        if let Ok(Some(_)) = child.try_wait() {
+            app.player.mpv_handle = None;
+            app.player.radio_ipc = None;
+            *app.player.radio_state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = mpv_ipc::RadioState::default();
+            app.player.radio_station_title.clear();
+            app.needs_redraw = true;
+        }
+    }
+}
+
+/// Spawns and monitors the radio track fetch background task.
+async fn handle_radio_fetch(
+    app: &mut App,
+    http_client: &reqwest::Client,
+    radio_tracks_dirty: &mut bool,
+    radio_task: &mut Option<tokio::task::JoinHandle<HashMap<String, String>>>,
+) {
+    if matches!(app.screen, Screen::RadioCatList | Screen::RadioList)
+        && *radio_tracks_dirty
+        && radio_task.is_none()
+    {
+        *radio_tracks_dirty = false;
+        let client = http_client.clone();
+        *radio_task = Some(tokio::spawn(async move { fetch_radio_now(&client).await }));
+    }
+    if radio_task.as_ref().is_some_and(|t| t.is_finished()) {
+        if let Some(task) = radio_task.take() {
+            if let Ok(tracks) = task.await {
+                for st in &mut app.data.radio {
+                    if let Some(t) = tracks.get(&st.id) {
+                        st.track = Some(t.clone());
+                    }
+                }
+                app.needs_redraw = true;
+            }
+        }
+    }
+    if !matches!(app.screen, Screen::RadioCatList | Screen::RadioList) {
+        *radio_tracks_dirty = true;
+    }
+}
+
+/// Processes AI background task completion, pushing results to the chat history.
+async fn handle_ai_task(app: &mut App, ai_task: &mut Option<tokio::task::JoinHandle<ai::AiChatResponse>>) {
+    if ai_task.as_ref().is_some_and(|t| t.is_finished()) {
+        if let Some(task) = ai_task.take() {
+            match task.await {
+                Ok(response) => {
+                    app.ai.chat_history.push(ai::ChatMsg {
+                        is_user: false,
+                        text: response.text,
+                    });
+                    if let Some(ref kw) = response.keywords {
+                        let now = chrono::Utc::now().timestamp();
+                        app.ai.results = ai::search_epg(&app.data, kw, now);
+                        app.nav.ai_state.select(if app.ai.results.is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
+                        if !app.ai.results.is_empty() {
+                            app.ai.focus_results = true;
+                        }
+                    }
+                    app.ai.loading = false;
+                    app.ai.chat_scroll = 0;
+                    app.needs_redraw = true;
+                }
+                Err(e) => {
+                    app.ai.loading = false;
+                    app.status_msg = Some(format!("AI task failed: {}", e));
+                    app.needs_redraw = true;
+                }
+            }
+        }
+    }
+}
+
+/// Spawns and processes the background EPG and data update task.
+async fn handle_update_task(
+    app: &mut App,
+    http_client: &reqwest::Client,
+    update_task: &mut Option<tokio::task::JoinHandle<Result<()>>>,
+) {
+    if matches!(app.screen, Screen::Updating) && update_task.is_none() {
+        let config = app.config.clone();
+        let client = http_client.clone();
+        *update_task = Some(tokio::spawn(
+            async move { update_data(&config, &client).await },
+        ));
+    }
+    if update_task.as_ref().is_some_and(|t| t.is_finished()) {
+        if let Some(task) = update_task.take() {
+            match task.await {
+                Ok(Ok(())) => {
+                    app.reload_data();
+                    let ch = app.data.channels.len();
+                    let rd = app.data.radio.len();
+                    let epg = app.data.epg.len();
+                    app.status_msg =
+                        Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
+                }
+                Ok(Err(e)) => {
+                    app.status_msg = Some(format!("Update failed: {}", e));
+                }
+                Err(e) => {
+                    app.status_msg = Some(format!("Update task panic: {}", e));
+                }
+            }
+            app.screen = Screen::MainMenu;
+            app.needs_redraw = true;
+        }
+    }
+}
+
+/// Processes input events (keyboard, mouse, paste) and routes them to active screen.
+async fn handle_input_event(
+    app: &mut App,
+    event: Event,
+    ai_task: &mut Option<tokio::task::JoinHandle<ai::AiChatResponse>>,
+    http_client: &reqwest::Client,
+) {
+    match event {
+        Event::Key(key) => {
+            let handled = match app.screen {
+                Screen::AiChat => {
+                    if app.ai.focus_results {
+                        match key.code {
+                            KeyCode::Up => nav_up(&mut app.nav.ai_state, app.ai.results.len()),
+                            KeyCode::Down => {
+                                nav_down(&mut app.nav.ai_state, app.ai.results.len())
+                            }
+                            KeyCode::Enter => app.ai_play_selected(),
+                            KeyCode::Char('d') => {
+                                if let Some(idx) = app.nav.ai_state.selected() {
+                                    if idx < app.ai.results.len() {
+                                        app.open_detail(app.ai.results[idx].channel_idx);
+                                    }
+                                }
+                            }
+                            KeyCode::Char(c)
+                                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                app.ai.focus_results = false;
+                                app.ai.query.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                app.ai.focus_results = false;
+                            }
+                            KeyCode::Tab => {
+                                app.ai.focus_results = false;
+                            }
+                            KeyCode::Esc => {
+                                app.ai.loading = false;
+                                app.screen = Screen::MainMenu;
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Char(c)
+                                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                app.ai.query.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                app.ai.query.pop();
+                            }
+                            KeyCode::Enter
+                                if !app.ai.query.is_empty()
+                                    && !app.ai.loading
+                                    && ai_task.is_none() =>
+                            {
+                                let msg = app.ai.query.drain(..).collect::<String>();
+                                app.ai.chat_history.push(ai::ChatMsg {
+                                    is_user: true,
+                                    text: msg.clone(),
+                                });
+                                app.ai.loading = true;
+                                app.ai.chat_scroll = 0;
+                                let client = http_client.clone();
+                                let history = app.ai.chat_history.clone();
+                                let context = ai::build_context(
+                                    &app.data,
+                                    &app.config.history,
+                                    &app.data.channels,
+                                );
+                                let choice =
+                                    ai::resolve_choice(&app.config.llm_provider);
+                                *ai_task = Some(tokio::spawn(async move {
+                                    ai::ai_chat(
+                                        &client,
+                                        &history[..history.len() - 1],
+                                        &msg,
+                                        &context,
+                                        choice,
+                                    )
+                                    .await
+                                }));
+                            }
+                            KeyCode::Tab if !app.ai.results.is_empty() => {
+                                app.ai.focus_results = true;
+                            }
+                            KeyCode::Esc => {
+                                app.ai.loading = false;
+                                app.screen = Screen::MainMenu;
+                            }
+                            _ => {}
+                        }
+                    }
+                    true
+                }
+                _ => false,
+            };
+            if !handled {
+                handle_key(app, key).await;
+            }
+        }
+        Event::Paste(data) => handle_paste(app, &data),
+        _ => {}
+    }
+    app.needs_redraw = true;
 }
 
 // ─── Terminal Restore Guard ──────────────────────────────────────────────────
@@ -656,7 +682,21 @@ fn handle_radio_list_input(app: &mut App, code: KeyCode) {
                             st.track.clone().unwrap_or_default(),
                         )
                     };
-                    app.run_mpv(&url, &title, &track, true);
+                    app.run_radio(&url, &title, &track);
+                }
+            }
+        }
+        KeyCode::Char('f' | 'F') => {
+            if let Some(idx) = app.nav.r_state.selected() {
+                if idx < app.nav.filtered_radio.len() {
+                    let st = &app.data.radio[app.nav.filtered_radio[idx]];
+                    let url = st.stream.clone();
+                    let name = st.title.clone();
+                    if app.config.favorites.contains(&url) {
+                        app.config.favorite_remove(&url);
+                    } else {
+                        app.config.favorite_add(&url, &name);
+                    }
                 }
             }
         }
@@ -676,7 +716,11 @@ fn handle_favorites_input(app: &mut App, code: KeyCode) {
                     let url = favs[idx].clone();
                     let name =
                         ui::get_name_by_url(&url, &app.data, &app.config).to_string();
-                    app.run_mpv(&url, &name, "", false);
+                    if is_radio_url(&url, &app.data) {
+                        app.run_radio(&url, &name, "");
+                    } else {
+                        app.run_video(&url, &name, "");
+                    }
                 }
             }
         }
@@ -696,7 +740,11 @@ fn handle_history_input(app: &mut App, code: KeyCode) {
                     let url = history[idx].clone();
                     let name =
                         ui::get_name_by_url(&url, &app.data, &app.config).to_string();
-                    app.run_mpv(&url, &name, "", false);
+                    if is_radio_url(&url, &app.data) {
+                        app.run_radio(&url, &name, "");
+                    } else {
+                        app.run_video(&url, &name, "");
+                    }
                 }
             }
         }
@@ -802,7 +850,7 @@ fn switch_playing_channel(app: &mut App, up: bool) {
                     let ch = &app.data.channels[app.nav.filtered[idx]];
                     let url = ch.url.clone();
                     let name = ch.name.clone();
-                    app.run_mpv(&url, &name, "", false);
+                    app.run_video(&url, &name, "");
                 }
             }
         }
@@ -818,7 +866,7 @@ fn switch_playing_channel(app: &mut App, up: bool) {
                     let url = st.stream.clone();
                     let name = st.title.clone();
                     let track = st.track.clone().unwrap_or_default();
-                    app.run_mpv(&url, &name, &track, true);
+                    app.run_radio(&url, &name, &track);
                 }
             }
         }
@@ -833,7 +881,7 @@ fn switch_playing_channel(app: &mut App, up: bool) {
                 if idx < favs.len() {
                     let url = favs[idx].clone();
                     let name = crate::ui::get_name_by_url(&url, &app.data, &app.config).to_string();
-                    app.run_mpv(&url, &name, "", false);
+                    app.run_video(&url, &name, "");
                 }
             }
         }
@@ -847,10 +895,14 @@ fn switch_playing_channel(app: &mut App, up: bool) {
                 if idx < app.config.history.len() {
                     let url = app.config.history[idx].clone();
                     let name = crate::ui::get_name_by_url(&url, &app.data, &app.config).to_string();
-                    app.run_mpv(&url, &name, "", false);
+                    app.run_video(&url, &name, "");
                 }
             }
         }
         _ => {}
     }
+}
+
+fn is_radio_url(url: &str, data: &crate::models::AppData) -> bool {
+    data.radio.iter().any(|r| r.stream == url || r.quality_urls.values().any(|u| u == url))
 }
