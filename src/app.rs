@@ -242,20 +242,20 @@ impl App {
                 let is_future = prog_start > now;
 
                 if is_current || is_future {
-                    self.run_mpv(&url, &name, &prog_title, false);
+                    self.run_video(&url, &name, &prog_title);
                 } else if ch.catchup_days > 0 {
                     // lutc = now (live edge), not prog_stop — flussonic catch-up convention.
                     let archive_url = build_archive_url(&url, prog_start, now);
-                    self.run_mpv(&archive_url, &name, &prog_title, false);
+                    self.run_video(&archive_url, &name, &prog_title);
                 } else {
-                    self.run_mpv(&url, &name, &prog_title, false);
+                    self.run_video(&url, &name, &prog_title);
                 }
                 self.config.history_push(&url, &name);
                 return;
             }
         }
 
-        self.run_mpv(&url, &name, "", false);
+        self.run_video(&url, &name, "");
         self.config.history_push(&url, &name);
     }
 
@@ -267,14 +267,18 @@ impl App {
         let ch = &self.data.channels[ch_idx];
         let url = ch.url.clone();
         let name = ch.name.clone();
-        self.run_mpv(&url, &name, "", false);
+        self.run_video(&url, &name, "");
         self.config.history_push(&url, &name);
     }
 
     // ─── MPV Player ──────────────────────────────────────────────────────
 
-    pub fn run_mpv(&mut self, url: &str, title: &str, sub_title: &str, radio: bool) {
-        self.player.run_mpv(url, title, sub_title, radio, &self.config, self.debug, &mut self.status_msg);
+    pub fn run_video(&mut self, url: &str, title: &str, sub_title: &str) {
+        self.player.run_video(url, title, sub_title, &self.config, self.debug, &mut self.status_msg);
+    }
+    
+    pub fn run_radio(&mut self, url: &str, title: &str, sub_title: &str) {
+        self.player.run_radio(url, title, sub_title, &self.config, self.debug, &mut self.status_msg);
     }
 
     // ─── AI Playback ────────────────────────────────────────────────────
@@ -297,16 +301,16 @@ impl App {
             let is_current = now >= result.program.start && now < result.program.stop;
             let is_future = result.program.start > now;
             if is_current || is_future {
-                self.run_mpv(&url, &name, &result.program.title, false);
+                self.run_video(&url, &name, &result.program.title);
             } else if ch.catchup_days > 0 {
                 // lutc = now (live edge), not program.stop — flussonic catch-up convention.
                 let archive_url = build_archive_url(&url, result.program.start, now);
-                self.run_mpv(&archive_url, &name, &result.program.title, false);
+                self.run_video(&archive_url, &name, &result.program.title);
             } else {
-                self.run_mpv(&url, &name, &result.program.title, false);
+                self.run_video(&url, &name, &result.program.title);
             }
         } else {
-            self.run_mpv(&url, &name, "", false);
+            self.run_video(&url, &name, "");
         }
         self.config.history_push(&url, &name);
     }
