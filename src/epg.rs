@@ -159,28 +159,31 @@ async fn fetch_radio_stations(
     let local_files = scan_local_playlists(&config.local_dir);
     for path in local_files {
         if path.file_name().unwrap_or_default().to_string_lossy().to_lowercase().contains("radio") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let parsed = parse_m3u(&content);
-                for ch in parsed {
-                    let mut genres = Vec::new();
-                    if !ch.group.is_empty() && ch.group != "Other" {
-                        genres.push(ch.group.clone());
-                        radio_genres.insert(ch.group.clone());
-                    } else {
-                        genres.push("Unknown".to_string());
-                        radio_genres.insert("Unknown".to_string());
-                    }
-                    
-                    radio.push(RadioStation {
-                        id: ch.name.clone(),
-                        title: ch.name.clone(),
-                        stream: ch.url.clone(),
-                        quality_urls: HashMap::new(),
-                        genres,
-                        provider: "Local".to_string(),
-                        track: None,
-                    });
+            let p = path.clone();
+            let content = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&p)).await {
+                Ok(Ok(c)) => c,
+                _ => continue,
+            };
+            let parsed = parse_m3u(&content);
+            for ch in parsed {
+                let mut genres = Vec::new();
+                if !ch.group.is_empty() && ch.group != "Other" {
+                    genres.push(ch.group.clone());
+                    radio_genres.insert(ch.group.clone());
+                } else {
+                    genres.push("Unknown".to_string());
+                    radio_genres.insert("Unknown".to_string());
                 }
+                
+                radio.push(RadioStation {
+                    id: ch.name.clone(),
+                    title: ch.name.clone(),
+                    stream: ch.url.clone(),
+                    quality_urls: HashMap::new(),
+                    genres,
+                    provider: "Local".to_string(),
+                    track: None,
+                });
             }
         }
     }
@@ -279,7 +282,7 @@ fn parse_m3u(m3u: &str) -> Vec<Channel> {
                 .captures(line)
                 .and_then(|c| c[1].parse().ok())
                 .unwrap_or(0);
-            let name = sanitize_terminal(line.rsplit(",").next().unwrap_or("").trim());
+            let name = sanitize_terminal(line.splitn(2, ',').last().unwrap_or("").trim());
             channels.push(Channel {
                 name_lower: name.to_lowercase(),
                 name,
@@ -680,6 +683,19 @@ http://host/film
     fn m3u_empty_input_yields_no_channels() {
         assert!(parse_m3u("").is_empty());
         assert!(parse_m3u("not a playlist at all").is_empty());
+    }
+
+    #[test]
+    fn m3u_name_with_comma_is_preserved() {
+        let m3u = "\
+#EXTM3U
+#EXTINF:-1 group-title=\"Movies\",Movies, HD Collection
+http://host/movies
+";
+        let chans = parse_m3u(m3u);
+        assert_eq!(chans.len(), 1);
+        // splitn(2, ',') keeps the full name after the first comma
+        assert_eq!(chans[0].name, "Movies, HD Collection");
     }
 
     // ── XMLTV EPG ────────────────────────────────────────────────────────

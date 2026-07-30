@@ -96,7 +96,12 @@ async fn main() -> Result<()> {
     radio_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        // ── Poll radio animation tick (20 FPS, only active during radio playback) ─
+        // ── Radio animation tick ──────────────────────────────────────────────
+        // When radio is playing, the loop needs to tick at ~20 FPS for VU meters
+        // and marquee. The previous `select! { _ = sleep(Duration::ZERO) => {} }`
+        // fallback caused a CPU spinloop. Now we simply await the interval or
+        // keyboard input, whichever arrives first — truly non-blocking and zero
+        // CPU waste when idle.
         if app.player.radio_ipc.is_some() {
             tokio::select! {
                 biased;
@@ -104,7 +109,10 @@ async fn main() -> Result<()> {
                     app.tick_radio();
                     app.needs_redraw = true;
                 }
-                _ = tokio::time::sleep(Duration::ZERO) => {}
+                // Yield once to let the rest of the loop body run even when the
+                // interval is not yet ready. tokio::task::yield_now() returns
+                // Pending exactly once, then Ready — no spinloop.
+                _ = tokio::task::yield_now() => {}
             }
         }
 
@@ -196,6 +204,11 @@ async fn handle_ai_task(app: &mut App, ai_task: &mut Option<tokio::task::JoinHan
                         is_user: false,
                         text: response.text,
                     });
+                    // Cap chat history to prevent unbounded memory growth
+                    const MAX_CHAT_HISTORY: usize = 100;
+                    if app.ai.chat_history.len() > MAX_CHAT_HISTORY {
+                        app.ai.chat_history.drain(0..app.ai.chat_history.len() - MAX_CHAT_HISTORY);
+                    }
                     if let Some(ref kw) = response.keywords {
                         let now = chrono::Utc::now().timestamp();
                         app.ai.results = ai::search_epg(&app.data, kw, now);

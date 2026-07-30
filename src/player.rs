@@ -21,6 +21,26 @@ fn radio_socket_path() -> String {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(crate::consts::get_cache_dir);
     let _ = std::fs::create_dir_all(&base);
+    // Harden permissions: the IPC socket allows arbitrary mpv commands, so the
+    // containing directory must not be accessible to other local users.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
+    }
+    // Clean up stale sockets from previous runs (crashes / ungraceful exits).
+    // Only remove sockets from our own PID prefix is too restrictive (PID reuse),
+    // so we remove all neon-mpv-*.sock files — they are only valid for a single
+    // mpv session anyway.
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("neon-mpv-") && name_str.ends_with(".sock") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
@@ -208,7 +228,7 @@ impl PlayerController {
             .arg("--no-ytdl");
 
         if debug {
-            let mpv_log = std::env::temp_dir().join("neon_mpv.log");
+            let mpv_log = crate::consts::get_cache_dir().join("neon_mpv.log");
             c.arg(format!("--log-file={}", mpv_log.display()));
             let safe_url = url.split('?').next().unwrap_or("(url)");
             main_log(&format!(
@@ -226,7 +246,7 @@ impl PlayerController {
             .arg(format!("--input-ipc-server={}", sock));
         c.arg("--").arg(url);
         c.stdout(Stdio::null()).stdin(Stdio::null());
-        let err_log = std::env::temp_dir().join("neon_mpv_stderr.log");
+        let err_log = crate::consts::get_cache_dir().join("neon_mpv_stderr.log");
         match File::create(err_log) {
             Ok(f) => {
                 c.stderr(Stdio::from(f));
@@ -291,7 +311,7 @@ impl PlayerController {
             .arg("--no-ytdl");
 
         if debug {
-            let mpv_log = std::env::temp_dir().join("neon_mpv.log");
+            let mpv_log = crate::consts::get_cache_dir().join("neon_mpv.log");
             c.arg(format!("--log-file={}", mpv_log.display()));
             let safe_url = url.split('?').next().unwrap_or("(url)");
             main_log(&format!(
@@ -307,7 +327,7 @@ impl PlayerController {
             .arg("--demuxer-max-bytes=1000MiB")
             .arg("--demuxer-max-back-bytes=500MiB")
             .arg("--hls-bitrate=max")
-            .arg("--demuxer-lavf-o=http_persistent=1")
+            .arg("--demuxer-lavf-o=http_persistent=0")
             .arg("--network-timeout=10")
             .arg("--vd-lavc-threads=4");
 

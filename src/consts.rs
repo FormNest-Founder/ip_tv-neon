@@ -40,8 +40,11 @@ pub const AGY_PREFERRED_PATH: &str = "/home/admin/.local/bin/agy";
 pub fn get_config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| {
-            eprintln!("[neon-iptv] XDG config dir unavailable, using /tmp/neon-iptv");
-            PathBuf::from("/tmp/neon-iptv")
+            // Per-UID fallback so other local users cannot access our data.
+            let uid = unsafe { libc::getuid() };
+            let fallback = PathBuf::from(format!("/tmp/neon-iptv-{uid}"));
+            eprintln!("[neon-iptv] XDG config dir unavailable, using {}", fallback.display());
+            fallback
         })
         .join("neon-iptv")
 }
@@ -49,8 +52,10 @@ pub fn get_config_dir() -> PathBuf {
 pub fn get_cache_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| {
-            eprintln!("[neon-iptv] XDG cache dir unavailable, using /tmp/neon-iptv");
-            PathBuf::from("/tmp/neon-iptv")
+            let uid = unsafe { libc::getuid() };
+            let fallback = PathBuf::from(format!("/tmp/neon-iptv-{uid}"));
+            eprintln!("[neon-iptv] XDG cache dir unavailable, using {}", fallback.display());
+            fallback
         })
         .join("neon-iptv")
 }
