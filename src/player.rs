@@ -1,6 +1,6 @@
-use crate::mpv_ipc::{spawn_ipc_task, IpcHandle, RadioState, SharedRadioState};
-use crate::utils::main_log;
 use crate::models::Config;
+use crate::mpv_ipc::{IpcHandle, RadioState, SharedRadioState, spawn_ipc_task};
+use crate::utils::main_log;
 use std::fs::File;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -112,19 +112,16 @@ impl PlayerController {
     }
 
     pub fn stop_all(&mut self) {
-        if let Some(ref ipc) = self.radio_ipc {
-            ipc.quit();
-            ipc.abort(); // stop the reader task so it can't reconnect to the next mpv on the reused socket
+        if let Some(ipc) = self.radio_ipc.take() {
+            // Abort the reader task so it can't reconnect to the next mpv
+            // reusing the same socket path. The process itself is killed below.
+            ipc.abort();
         }
-        self.radio_ipc = None;
 
         if let Some(mut child) = self.mpv_handle.take() {
             let _ = child.start_kill();
         }
-        *self
-            .radio_state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = RadioState::default();
+        *self.radio_state.lock().unwrap_or_else(|e| e.into_inner()) = RadioState::default();
         self.radio_station_title.clear();
         self.visuals.radio_start = None;
         self.visuals.vu_bars = [0.0; VU_BARS];
@@ -136,10 +133,7 @@ impl PlayerController {
 
     pub fn tick_radio(&mut self) {
         let (paused, muted, volume) = {
-            let st = self
-                .radio_state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let st = self.radio_state.lock().unwrap_or_else(|e| e.into_inner());
             (st.paused, st.muted, st.volume)
         };
 
@@ -196,7 +190,7 @@ impl PlayerController {
         }
     }
 
-        /// Launches mpv for radio playback with IPC enabled
+    /// Launches mpv for radio playback with IPC enabled
     pub fn run_radio(
         &mut self,
         url: &str,
@@ -208,7 +202,9 @@ impl PlayerController {
     ) {
         if !crate::app::is_http_url(url) {
             let scheme = url.split(':').next().unwrap_or("?");
-            main_log(&format!("[security] blocked non-http media URL scheme: {scheme}"));
+            main_log(&format!(
+                "[security] blocked non-http media URL scheme: {scheme}"
+            ));
             *status_msg = Some("Blocked: only http/https media URLs are allowed".into());
             return;
         }
@@ -291,7 +287,9 @@ impl PlayerController {
     ) {
         if !crate::app::is_http_url(url) {
             let scheme = url.split(':').next().unwrap_or("?");
-            main_log(&format!("[security] blocked non-http media URL scheme: {scheme}"));
+            main_log(&format!(
+                "[security] blocked non-http media URL scheme: {scheme}"
+            ));
             *status_msg = Some("Blocked: only http/https media URLs are allowed".into());
             return;
         }
@@ -338,9 +336,16 @@ impl PlayerController {
                 .arg(format!("--geometry={}", config.video_geometry));
         }
         c.arg("--").arg(url);
-        c.stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null());
+        c.stdout(Stdio::null()).stdin(Stdio::null());
+        let err_log = crate::consts::get_cache_dir().join("neon_mpv_video_stderr.log");
+        match File::create(err_log) {
+            Ok(f) => {
+                c.stderr(Stdio::from(f));
+            }
+            Err(_) => {
+                c.stderr(Stdio::null());
+            }
+        }
         #[cfg(unix)]
         unsafe {
             c.pre_exec(|| {

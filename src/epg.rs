@@ -50,13 +50,13 @@ pub async fn update_data(config: &Config, client: &reqwest::Client) -> Result<()
 
     let tracks_map = fetch_radio_now(client).await;
     let (radio, radio_genres) = fetch_radio_stations(client, &tracks_map, config).await;
-    
+
     let mut r_groups: Vec<String> = radio_genres.into_iter().collect();
     r_groups.sort();
 
     let channels = fetch_playlist(client, config).await?;
     let groups: HashSet<String> = channels.iter().map(|ch| ch.group.clone()).collect();
-    
+
     let mut sorted_groups: Vec<String> = groups.into_iter().collect();
     sorted_groups.sort();
 
@@ -158,12 +158,19 @@ async fn fetch_radio_stations(
 
     let local_files = scan_local_playlists(&config.local_dir);
     for path in local_files {
-        if path.file_name().unwrap_or_default().to_string_lossy().to_lowercase().contains("radio") {
+        if path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase()
+            .contains("radio")
+        {
             let p = path.clone();
-            let content = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&p)).await {
-                Ok(Ok(c)) => c,
-                _ => continue,
-            };
+            let content =
+                match tokio::task::spawn_blocking(move || std::fs::read_to_string(&p)).await {
+                    Ok(Ok(c)) => c,
+                    _ => continue,
+                };
             let parsed = parse_m3u(&content);
             for ch in parsed {
                 let mut genres = Vec::new();
@@ -174,7 +181,7 @@ async fn fetch_radio_stations(
                     genres.push("Unknown".to_string());
                     radio_genres.insert("Unknown".to_string());
                 }
-                
+
                 radio.push(RadioStation {
                     id: ch.name.clone(),
                     title: ch.name.clone(),
@@ -316,10 +323,7 @@ fn parse_m3u(m3u: &str) -> Vec<Channel> {
 /// `MAX_EPG_PROGRAMMES`, and the channel map at `MAX_EPG_CHANNELS`. Hitting the
 /// programme cap logs loudly and stops parsing (CG5). Untrusted title/desc text
 /// is sanitized at this parse boundary so every render site is safe (CG8).
-fn parse_epg(
-    b: &[u8],
-    is_gz: bool,
-) -> (HashMap<String, Vec<EpgProgram>>, HashMap<String, String>) {
+fn parse_epg(b: &[u8], is_gz: bool) -> (HashMap<String, Vec<EpgProgram>>, HashMap<String, String>) {
     let mut epg_temp: HashMap<String, Vec<EpgProgram>> = HashMap::new();
     let mut name_to_id_temp: HashMap<String, String> = HashMap::new();
     let now = Utc::now().timestamp();
@@ -375,12 +379,8 @@ fn parse_epg(
                             b"start" => {
                                 start = parse_xml_time(&String::from_utf8_lossy(&attr.value))
                             }
-                            b"stop" => {
-                                stop = parse_xml_time(&String::from_utf8_lossy(&attr.value))
-                            }
-                            b"channel" => {
-                                ch_id = String::from_utf8_lossy(&attr.value).to_string()
-                            }
+                            b"stop" => stop = parse_xml_time(&String::from_utf8_lossy(&attr.value)),
+                            b"channel" => ch_id = String::from_utf8_lossy(&attr.value).to_string(),
                             _ => {}
                         }
                     }
@@ -540,16 +540,27 @@ pub async fn fetch_radio_now(client: &reqwest::Client) -> HashMap<String, String
             if let Some(st) = stations {
                 for s in st {
                     let id = s["id"].as_i64().unwrap_or(0).to_string();
-                    let mut artist = s["track"]["artist"].as_str().unwrap_or("").trim().to_string();
+                    let mut artist = s["track"]["artist"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
                     let mut song = s["track"]["song"].as_str().unwrap_or("").trim().to_string();
-                    
+
                     // FILTER: Misconfigured RadioRecord stations sometimes return double-encoded JSON
                     // (a backend response string) in the artist field instead of the actual artist.
                     if artist.starts_with('{') && artist.ends_with('}') {
                         if let Ok(j) = serde_json::from_str::<serde_json::Value>(&artist) {
                             let track_obj = j.get("result").or(j.get("track")).unwrap_or(&j);
-                            let ext_a = track_obj.get("artist").and_then(|v| v.as_str()).unwrap_or("");
-                            let ext_s = track_obj.get("song").or(track_obj.get("title")).and_then(|v| v.as_str()).unwrap_or("");
+                            let ext_a = track_obj
+                                .get("artist")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let ext_s = track_obj
+                                .get("song")
+                                .or(track_obj.get("title"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
                             if !ext_a.is_empty() || !ext_s.is_empty() {
                                 artist = ext_a.to_string();
                                 song = ext_s.to_string();

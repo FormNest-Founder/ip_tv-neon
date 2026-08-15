@@ -7,8 +7,8 @@ pub const APP_VERSION: u32 = 911;
 /// Independent of APP_VERSION so cache invalidations don't require app version bump.
 pub const CACHE_SCHEMA_VERSION: u32 = 2;
 pub const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-pub const RADIO_API: &str = "https://www.radiorecord.ru/api/stations";
-pub const RADIO_NOW_API: &str = "https://www.radiorecord.ru/api/stations/now";
+pub const RADIO_API: &str = "https://www.radiorecord.ru/api/stations/";
+pub const RADIO_NOW_API: &str = "https://www.radiorecord.ru/api/stations/now/";
 pub const RECOMMENDED_EPG: &str = "https://epg.one/epg.xml.gz";
 
 // ─── Ingest Hard Caps (CG2 — decompression-bomb / OOM defence) ───────────────
@@ -43,7 +43,10 @@ pub fn get_config_dir() -> PathBuf {
             // Per-UID fallback so other local users cannot access our data.
             let uid = unsafe { libc::getuid() };
             let fallback = PathBuf::from(format!("/tmp/neon-iptv-{uid}"));
-            eprintln!("[neon-iptv] XDG config dir unavailable, using {}", fallback.display());
+            eprintln!(
+                "[neon-iptv] XDG config dir unavailable, using {}",
+                fallback.display()
+            );
             fallback
         })
         .join("neon-iptv")
@@ -54,7 +57,10 @@ pub fn get_cache_dir() -> PathBuf {
         .unwrap_or_else(|| {
             let uid = unsafe { libc::getuid() };
             let fallback = PathBuf::from(format!("/tmp/neon-iptv-{uid}"));
-            eprintln!("[neon-iptv] XDG cache dir unavailable, using {}", fallback.display());
+            eprintln!(
+                "[neon-iptv] XDG cache dir unavailable, using {}",
+                fallback.display()
+            );
             fallback
         })
         .join("neon-iptv")

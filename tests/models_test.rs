@@ -71,11 +71,11 @@ fn corrupt_config_is_backed_up_before_default() {
     // overwritten by the next save().
     let bak = path.with_extension("json.bak");
     assert!(bak.exists(), "corrupt config must be backed up to .bak");
-    assert!(!path.exists(), "corrupt config must be moved out of the way");
-    assert_eq!(
-        std::fs::read(&bak).unwrap(),
-        b"{ this is not valid json ]"
+    assert!(
+        !path.exists(),
+        "corrupt config must be moved out of the way"
     );
+    assert_eq!(std::fs::read(&bak).unwrap(), b"{ this is not valid json ]");
 }
 
 #[test]

@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use tokio::time::{sleep, timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep, timeout};
 
 // ─── Shared State ────────────────────────────────────────────────────────────
 
@@ -110,7 +110,10 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
             None => {
                 // Socket never appeared — mpv probably failed. Flag the failure so
                 // the UI shows "IPC not connected" rather than a live-looking panel.
-                state_clone.lock().unwrap_or_else(|e| e.into_inner()).connected = false;
+                state_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .connected = false;
                 return;
             }
         };
@@ -130,11 +133,17 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
         for sub in &subs {
             let msg = format!("{}\n", sub);
             if writer.write_all(msg.as_bytes()).await.is_err() {
-                state_clone.lock().unwrap_or_else(|e| e.into_inner()).connected = false;
+                state_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .connected = false;
                 return;
             }
         }
-        state_clone.lock().unwrap_or_else(|e| e.into_inner()).connected = true;
+        state_clone
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .connected = true;
 
         loop {
             tokio::select! {
@@ -160,7 +169,10 @@ pub fn spawn_ipc_task(socket_path: String, state: SharedRadioState) -> IpcHandle
         }
     });
 
-    IpcHandle { tx, abort: join.abort_handle() }
+    IpcHandle {
+        tx,
+        abort: join.abort_handle(),
+    }
 }
 
 // ─── Event Parser ─────────────────────────────────────────────────────────────
@@ -223,7 +235,7 @@ fn handle_event(text: &str, state: &SharedRadioState) {
                 .unwrap_or("")
                 .trim()
                 .to_string();
-                
+
             // FILTER: Misconfigured stations sometimes send raw JSON backend responses as icy-title.
             // Let's try to extract artist/song from it before clearing it.
             if raw_icy.starts_with('{') {
@@ -232,17 +244,21 @@ fn handle_event(text: &str, state: &SharedRadioState) {
                     if let Ok(j) = serde_json::from_str::<serde_json::Value>(json_substring) {
                         let mut ext_artist = "";
                         let mut ext_title = "";
-                        
+
                         // Check common nested structures, e.g., j["result"]["artist"]
                         let track_obj = j.get("result").or(j.get("track")).unwrap_or(&j);
-                        
+
                         if let Some(a) = track_obj.get("artist").and_then(|v| v.as_str()) {
                             ext_artist = a;
                         }
-                        if let Some(t) = track_obj.get("song").or(track_obj.get("title")).and_then(|v| v.as_str()) {
+                        if let Some(t) = track_obj
+                            .get("song")
+                            .or(track_obj.get("title"))
+                            .and_then(|v| v.as_str())
+                        {
                             ext_title = t;
                         }
-                        
+
                         if !ext_artist.is_empty() || !ext_title.is_empty() {
                             if !ext_artist.is_empty() && !ext_title.is_empty() {
                                 raw_icy = format!("{} - {}", ext_artist, ext_title);
@@ -259,7 +275,7 @@ fn handle_event(text: &str, state: &SharedRadioState) {
                     raw_icy.clear();
                 }
             }
-            
+
             st.icy_title = raw_icy.clone();
 
             // Prefer explicit artist/title tags if present

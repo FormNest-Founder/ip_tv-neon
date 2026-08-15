@@ -1,12 +1,13 @@
 // ─── Imports ─────────────────────────────────────────────────────────────────
 
 use anyhow::Result;
+use crate::utils::main_log;
 use crossterm::{
     event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend, widgets::ListState};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::time::interval;
@@ -25,7 +26,7 @@ mod utils;
 
 use app::App;
 use epg::{fetch_radio_now, scan_local_playlists, update_data};
-use models::{Config, Screen, SETTINGS_COUNT};
+use models::{Config, SETTINGS_COUNT, Screen};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -117,7 +118,13 @@ async fn main() -> Result<()> {
         }
 
         handle_mpv_exit(&mut app);
-        handle_radio_fetch(&mut app, &http_client, &mut radio_tracks_dirty, &mut radio_task).await;
+        handle_radio_fetch(
+            &mut app,
+            &http_client,
+            &mut radio_tracks_dirty,
+            &mut radio_task,
+        )
+        .await;
         handle_ai_task(&mut app, &mut ai_task).await;
         handle_update_task(&mut app, &http_client, &mut update_task).await;
 
@@ -152,8 +159,11 @@ fn handle_mpv_exit(app: &mut App) {
     if let Some(ref mut child) = app.player.mpv_handle {
         if let Ok(Some(_)) = child.try_wait() {
             app.player.mpv_handle = None;
-            app.player.radio_ipc = None;
-            *app.player.radio_state
+            if let Some(ipc) = app.player.radio_ipc.take() {
+                ipc.abort();
+            }
+            *app.player
+                .radio_state
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = mpv_ipc::RadioState::default();
             app.player.radio_station_title.clear();
@@ -179,13 +189,19 @@ async fn handle_radio_fetch(
     }
     if radio_task.as_ref().is_some_and(|t| t.is_finished()) {
         if let Some(task) = radio_task.take() {
-            if let Ok(tracks) = task.await {
-                for st in &mut app.data.radio {
-                    if let Some(t) = tracks.get(&st.id) {
-                        st.track = Some(t.clone());
+            match task.await {
+                Ok(tracks) => {
+                    for st in &mut app.data.radio {
+                        if let Some(t) = tracks.get(&st.id) {
+                            st.track = Some(t.clone());
+                        }
                     }
+                    app.needs_redraw = true;
                 }
-                app.needs_redraw = true;
+                Err(e) => {
+                    main_log(&format!("[radio] track fetch task crashed: {e}"));
+                    *radio_tracks_dirty = true; // retry on next tick
+                }
             }
         }
     }
@@ -195,7 +211,10 @@ async fn handle_radio_fetch(
 }
 
 /// Processes AI background task completion, pushing results to the chat history.
-async fn handle_ai_task(app: &mut App, ai_task: &mut Option<tokio::task::JoinHandle<ai::AiChatResponse>>) {
+async fn handle_ai_task(
+    app: &mut App,
+    ai_task: &mut Option<tokio::task::JoinHandle<ai::AiChatResponse>>,
+) {
     if ai_task.as_ref().is_some_and(|t| t.is_finished()) {
         if let Some(task) = ai_task.take() {
             match task.await {
@@ -207,7 +226,9 @@ async fn handle_ai_task(app: &mut App, ai_task: &mut Option<tokio::task::JoinHan
                     // Cap chat history to prevent unbounded memory growth
                     const MAX_CHAT_HISTORY: usize = 100;
                     if app.ai.chat_history.len() > MAX_CHAT_HISTORY {
-                        app.ai.chat_history.drain(0..app.ai.chat_history.len() - MAX_CHAT_HISTORY);
+                        app.ai
+                            .chat_history
+                            .drain(0..app.ai.chat_history.len() - MAX_CHAT_HISTORY);
                     }
                     if let Some(ref kw) = response.keywords {
                         let now = chrono::Utc::now().timestamp();
@@ -222,7 +243,6 @@ async fn handle_ai_task(app: &mut App, ai_task: &mut Option<tokio::task::JoinHan
                         }
                     }
                     app.ai.loading = false;
-                    app.ai.chat_scroll = 0;
                     app.needs_redraw = true;
                 }
                 Err(e) => {
@@ -256,8 +276,7 @@ async fn handle_update_task(
                     let ch = app.data.channels.len();
                     let rd = app.data.radio.len();
                     let epg = app.data.epg.len();
-                    app.status_msg =
-                        Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
+                    app.status_msg = Some(format!("Updated: {} ch, {} radio, {} EPG", ch, rd, epg));
                 }
                 Ok(Err(e)) => {
                     app.status_msg = Some(format!("Update failed: {}", e));
@@ -286,9 +305,7 @@ async fn handle_input_event(
                     if app.ai.focus_results {
                         match key.code {
                             KeyCode::Up => nav_up(&mut app.nav.ai_state, app.ai.results.len()),
-                            KeyCode::Down => {
-                                nav_down(&mut app.nav.ai_state, app.ai.results.len())
-                            }
+                            KeyCode::Down => nav_down(&mut app.nav.ai_state, app.ai.results.len()),
                             KeyCode::Enter => app.ai_play_selected(),
                             KeyCode::Char('d') => {
                                 if let Some(idx) = app.nav.ai_state.selected() {
@@ -297,9 +314,7 @@ async fn handle_input_event(
                                     }
                                 }
                             }
-                            KeyCode::Char(c)
-                                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.ai.focus_results = false;
                                 app.ai.query.push(c);
                             }
@@ -317,9 +332,7 @@ async fn handle_input_event(
                         }
                     } else {
                         match key.code {
-                            KeyCode::Char(c)
-                                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.ai.query.push(c);
                             }
                             KeyCode::Backspace => {
@@ -336,7 +349,6 @@ async fn handle_input_event(
                                     text: msg.clone(),
                                 });
                                 app.ai.loading = true;
-                                app.ai.chat_scroll = 0;
                                 let client = http_client.clone();
                                 let history = app.ai.chat_history.clone();
                                 let context = ai::build_context(
@@ -344,8 +356,7 @@ async fn handle_input_event(
                                     &app.config.history,
                                     &app.data.channels,
                                 );
-                                let choice =
-                                    ai::resolve_choice(&app.config.llm_provider);
+                                let choice = ai::resolve_choice(&app.config.llm_provider);
                                 *ai_task = Some(tokio::spawn(async move {
                                     ai::ai_chat(
                                         &client,
@@ -460,7 +471,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
     let in_text_entry = matches!(app.screen, Screen::ChanList | Screen::SettingsEdit(_));
     if app.player.radio_ipc.is_some() && !in_text_entry {
         let cur_vol = app
-            .player.radio_state
+            .player
+            .radio_state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .volume;
@@ -485,7 +497,8 @@ async fn handle_key(app: &mut App, key: event::KeyEvent) {
             }
             KeyCode::Char('m') => {
                 let muted = app
-                    .player.radio_state
+                    .player
+                    .radio_state
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .muted;
@@ -556,10 +569,9 @@ async fn handle_main_menu_input(app: &mut App, code: KeyCode) {
             1 => app.screen = Screen::RadioCatList,
             2 => {
                 let local_dir = app.config.local_dir.clone();
-                let files =
-                    tokio::task::spawn_blocking(move || scan_local_playlists(&local_dir))
-                        .await
-                        .unwrap_or_default();
+                let files = tokio::task::spawn_blocking(move || scan_local_playlists(&local_dir))
+                    .await
+                    .unwrap_or_default();
                 app.local_files = files;
                 app.nav.d_state.select(Some(0));
                 app.screen = Screen::LocalList;
@@ -567,9 +579,7 @@ async fn handle_main_menu_input(app: &mut App, code: KeyCode) {
             3 => {
                 app.ai.query.clear();
                 app.ai.results.clear();
-                app.ai.chat_history.clear();
                 app.ai.focus_results = false;
-                app.ai.chat_scroll = 0;
                 app.screen = Screen::AiChat;
             }
             4 => {
@@ -727,8 +737,7 @@ fn handle_favorites_input(app: &mut App, code: KeyCode) {
                 let favs = app.sorted_favorites();
                 if idx < favs.len() {
                     let url = favs[idx].clone();
-                    let name =
-                        ui::get_name_by_url(&url, &app.data, &app.config).to_string();
+                    let name = ui::get_name_by_url(&url, &app.data, &app.config).to_string();
                     if is_radio_url(&url, &app.data) {
                         app.run_radio(&url, &name, "");
                     } else {
@@ -751,8 +760,7 @@ fn handle_history_input(app: &mut App, code: KeyCode) {
                 let history: Vec<_> = app.config.history.iter().rev().collect();
                 if idx < history.len() {
                     let url = history[idx].clone();
-                    let name =
-                        ui::get_name_by_url(&url, &app.data, &app.config).to_string();
+                    let name = ui::get_name_by_url(&url, &app.data, &app.config).to_string();
                     if is_radio_url(&url, &app.data) {
                         app.run_radio(&url, &name, "");
                     } else {
@@ -917,5 +925,7 @@ fn switch_playing_channel(app: &mut App, up: bool) {
 }
 
 fn is_radio_url(url: &str, data: &crate::models::AppData) -> bool {
-    data.radio.iter().any(|r| r.stream == url || r.quality_urls.values().any(|u| u == url))
+    data.radio
+        .iter()
+        .any(|r| r.stream == url || r.quality_urls.values().any(|u| u == url))
 }

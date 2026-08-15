@@ -1,6 +1,6 @@
 use ip_tv_neon::ai::{
-    extract_keywords, next_choice_id, resolve_agy_binary, resolve_choice, search_epg, Backend,
-    MODEL_CATALOG,
+    Backend, MODEL_CATALOG, extract_keywords, next_choice_id, resolve_agy_binary, resolve_choice,
+    search_epg,
 };
 use ip_tv_neon::models::{AppData, Channel, EpgProgram};
 

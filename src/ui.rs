@@ -1,9 +1,9 @@
 // ─── Imports ─────────────────────────────────────────────────────────────────
 
 use crate::app::App;
-use crate::player::VU_BARS;
 use crate::epg::get_current_epg;
-use crate::models::{Screen, SETTINGS_COUNT, SETTINGS_LABELS};
+use crate::models::{SETTINGS_COUNT, SETTINGS_LABELS, Screen};
+use crate::player::VU_BARS;
 use crate::utils::sanitize_terminal as sanitize;
 use chrono::Utc;
 use ratatui::{prelude::*, widgets::*};
@@ -181,8 +181,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let (r, g, b) = app.config.theme_color;
     let theme = Color::Rgb(r, g, b);
     let block = Block::default()
-        .borders(Borders::ALL).border_type(BorderType::Rounded)
-        .title(" NIGHT CITY HUB ").padding(Padding::uniform(1))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" NIGHT CITY HUB ")
+        .padding(Padding::uniform(1))
         .border_style(Style::default().fg(theme))
         .style(Style::default().bg(NEON_DIM));
     f.render_widget(block.clone(), size);
@@ -247,8 +249,22 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
 fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     // Snapshot IPC state (lock once, release before rendering)
-    let (paused, muted, volume, media_title, icy_name, meta_artist, meta_track, bitrate_kbps, connected) = {
-        let st = app.player.radio_state.lock().unwrap_or_else(|e| e.into_inner());
+    let (
+        paused,
+        muted,
+        volume,
+        media_title,
+        icy_name,
+        meta_artist,
+        meta_track,
+        bitrate_kbps,
+        connected,
+    ) = {
+        let st = app
+            .player
+            .radio_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         (
             st.paused,
             st.muted,
@@ -285,7 +301,8 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
 
     // Outer neon border with title
     let outer = Block::default()
-        .borders(Borders::ALL).border_type(BorderType::Rounded)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(NEON_CYAN))
         .title(Line::from(vec![
             Span::styled(
@@ -333,7 +350,11 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(status_color).bold(),
         ),
         Span::styled(
-            marquee_slice(&station_display, app.player.visuals.marquee_offset / 3, station_w),
+            marquee_slice(
+                &station_display,
+                app.player.visuals.marquee_offset / 3,
+                station_w,
+            ),
             Style::default()
                 .fg(Color::Rgb(0, 240, 255))
                 .add_modifier(Modifier::BOLD),
@@ -353,7 +374,12 @@ fn render_radio_panel(f: &mut Frame, app: &App, area: Rect) {
     // FALLBACK: If stream metadata is empty (e.g. stripped bad JSON or missing),
     // use the track fetched from the provider API if available.
     if safe_artist.is_empty() && safe_track.is_empty() && safe_media_title.is_empty() {
-        if let Some(st) = app.data.radio.iter().find(|s| s.title == app.player.radio_station_title) {
+        if let Some(st) = app
+            .data
+            .radio
+            .iter()
+            .find(|s| s.title == app.player.radio_station_title)
+        {
             if let Some(ref t) = st.track {
                 safe_track = sanitize(t);
             }
@@ -599,7 +625,12 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(
             Paragraph::new("  No EPG data available")
                 .fg(Color::DarkGray)
-                .block(Block::default().title(" Programs ").borders(Borders::ALL).border_type(BorderType::Rounded)),
+                .block(
+                    Block::default()
+                        .title(" Programs ")
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded),
+                ),
             chunks[1],
         );
     } else {
@@ -655,7 +686,12 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
             " Programs ".to_string()
         };
         let list = List::new(items)
-            .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded),
+            )
             .highlight_style(
                 Style::default()
                     .bg(Color::Rgb(0, 40, 40))
@@ -685,7 +721,8 @@ fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
             .block(
                 Block::default()
                     .title(" Description ")
-                    .borders(Borders::ALL).border_type(BorderType::Rounded)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(Color::DarkGray)),
             ),
         chunks[2],
@@ -743,7 +780,8 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
         .block(
             Block::default()
                 .title(" ⚙  Settings ")
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -759,7 +797,8 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect, editing: Option<usi
     f.render_widget(
         Paragraph::new(hint).block(
             Block::default()
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray)),
         ),
         chunks[1],
@@ -791,7 +830,8 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
             Paragraph::new(hint).fg(Color::DarkGray).block(
                 Block::default()
                     .title(" Results ")
-                    .borders(Borders::ALL).border_type(BorderType::Rounded)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(focus_border(false)),
             ),
             main_chunks[0],
@@ -853,7 +893,8 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         let results_block = Block::default()
             .title(title)
             .title_bottom(Line::from(" Enter: play | D: detail | Tab: chat ").fg(Color::DarkGray))
-            .borders(Borders::ALL).border_type(BorderType::Rounded)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(focus_border(app.ai.focus_results));
         let list = List::new(items).block(results_block).highlight_style(
             Style::default()
@@ -922,7 +963,8 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
             .block(
                 Block::default()
                     .title(" Chat ")
-                    .borders(Borders::ALL).border_type(BorderType::Rounded)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(focus_border(!app.ai.focus_results)),
             ),
         bottom_chunks[0],
@@ -932,7 +974,8 @@ fn render_ai_chat(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
     f.render_widget(
         Paragraph::new(format!(" > {}", app.ai.query)).block(
             Block::default()
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(input_border)),
         ),
         bottom_chunks[1],
@@ -978,10 +1021,7 @@ mod tests {
             build_marquee_text("Radio", "", "", "playlist.m3u8"),
             "Radio"
         );
-        assert_eq!(
-            build_marquee_text("Radio", "", "", "stream.mp3"),
-            "Radio"
-        );
+        assert_eq!(build_marquee_text("Radio", "", "", "stream.mp3"), "Radio");
 
         // Non-generic media title is kept as fallback
         assert_eq!(
@@ -990,8 +1030,6 @@ mod tests {
         );
     }
 }
-
-
 
 /// Renders the updating screen
 fn render_updating(f: &mut Frame, area: Rect) {
@@ -1017,9 +1055,7 @@ fn render_main_menu(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
     } else {
         vec![Constraint::Length(10), Constraint::Min(0)]
     };
-    let chunks = Layout::default()
-        .constraints(constraints)
-        .split(area);
+    let chunks = Layout::default().constraints(constraints).split(area);
     let version = env!("CARGO_PKG_VERSION");
     let status = format!(
         "   NEON HUB v{}\n   Channels: {}  Radio: {}",
@@ -1081,7 +1117,8 @@ fn render_cat_list(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         .block(
             Block::default()
                 .title(" 📺 Categories ")
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -1170,7 +1207,12 @@ fn render_chan_list(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let title = format!(" {} ({}) ", app.nav.selected_group, total);
     let list = List::new(items)
-        .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        )
         .highlight_style(
             Style::default()
                 .bg(Color::Rgb(0, 40, 40))
@@ -1185,7 +1227,8 @@ fn render_chan_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(
         Paragraph::new(format!(" SEARCH: {}", app.nav.search)).block(
             Block::default()
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Yellow)),
         ),
         chunks[1],
@@ -1212,7 +1255,8 @@ fn render_radio_cat_list(f: &mut Frame, app: &mut App, area: Rect, theme: Color)
         .block(
             Block::default()
                 .title(" 📻 Radio Genres ")
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -1251,7 +1295,12 @@ fn render_radio_list(f: &mut Frame, app: &mut App, area: Rect) {
         app.nav.filtered_radio.len()
     );
     let list = List::new(items)
-        .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded))
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        )
         .highlight_style(
             Style::default()
                 .bg(Color::Rgb(0, 30, 0))
@@ -1275,7 +1324,8 @@ fn render_favorites(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         .block(
             Block::default()
                 .title(" ⭐ Favorites ")
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -1298,7 +1348,8 @@ fn render_history(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         .block(
             Block::default()
                 .title(" 🕐 History ")
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());
@@ -1324,7 +1375,8 @@ fn render_local_list(f: &mut Frame, app: &mut App, area: Rect, theme: Color) {
         .block(
             Block::default()
                 .title(format!(" 📁 Local Playlists — {} ", dir_label))
-                .borders(Borders::ALL).border_type(BorderType::Rounded)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme)),
         )
         .highlight_style(Style::default().bg(theme).fg(Color::Black).bold());

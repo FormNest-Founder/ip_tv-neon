@@ -351,7 +351,7 @@ pub fn build_context(data: &AppData, config_history: &[String], channels: &[Chan
             ctx.push_str(&format!("{}: {}{}\n", ch.name, prog.title, archive));
             epg_count += 1;
         }
-        if epg_count >= 200 {
+        if epg_count >= 60 {
             break;
         }
     }
@@ -393,7 +393,7 @@ pub async fn ai_chat(
             return AiChatResponse {
                 text: e,
                 keywords: None,
-            }
+            };
         }
     };
 
@@ -437,13 +437,14 @@ async fn chat_deepseek(
         messages,
         temperature: 0.7,
     };
-        let resp = execute_http_chat(
+    let resp = execute_http_chat(
         client,
         "https://api.deepseek.com/v1/chat/completions",
         ("Authorization", &format!("Bearer {}", api_key)),
         &body,
         "API error",
-    ).await?;
+    )
+    .await?;
 
     let parsed: ApiResponse = resp
         .json()
@@ -500,7 +501,7 @@ async fn chat_gemini(
         },
     };
 
-        let url = format!(
+    let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
         model
     );
@@ -510,7 +511,8 @@ async fn chat_gemini(
         ("X-Goog-Api-Key", &api_key),
         &body,
         "Gemini API error",
-    ).await?;
+    )
+    .await?;
 
     let parsed: GeminiResponse = resp
         .json()
@@ -540,35 +542,50 @@ async fn chat_agy(
     system: &str,
     model: &str,
 ) -> Result<String, String> {
-    let bin = agy_binary()
-        .ok_or_else(|| "AGY недоступен: бинарь agy не найден (~/.local/bin или PATH).".to_string())?;
+    let bin = agy_binary().ok_or_else(|| {
+        "AGY недоступен: бинарь agy не найден (~/.local/bin или PATH).".to_string()
+    })?;
 
     // Flatten everything into a single prompt — agy print-mode is one-shot.
-    let mut prompt = String::with_capacity(4096);
+    // SYSTEM is NEVER truncated: it contains the anti-injection ROLE_PREAMBLE.
+    // Only the history + current user message are eligible for truncation.
+    const AGY_PROMPT_CAP_BYTES: usize = 96 * 1024;
+    const SYSTEM_HEADROOM: usize = 4096;
+
+    let mut prompt = String::with_capacity(AGY_PROMPT_CAP_BYTES);
     prompt.push_str(system);
     prompt.push_str("\n\n");
+
+    let mut tail = String::with_capacity(AGY_PROMPT_CAP_BYTES);
     let skip = history.len().saturating_sub(10);
     for msg in &history[skip..] {
-        prompt.push_str(if msg.is_user { "USER: " } else { "ASSISTANT: " });
-        prompt.push_str(&msg.text);
-        prompt.push('\n');
+        tail.push_str(if msg.is_user { "USER: " } else { "ASSISTANT: " });
+        tail.push_str(&msg.text);
+        tail.push('\n');
     }
-    prompt.push_str("USER: ");
-    prompt.push_str(user_msg);
-    prompt.push_str("\nASSISTANT:");
+    tail.push_str("USER: ");
+    tail.push_str(user_msg);
+    tail.push_str("\nASSISTANT:");
 
-    // The agy CLI takes the prompt as a single argv value (`-p <prompt>`); it has
-    // no stdin prompt mode. A huge EPG context could blow the per-arg limit
-    // (E2BIG, MAX_ARG_STRLEN ≈ 128 KiB on Linux) and is visible in /proc/*/cmdline,
-    // so cap the flattened prompt well under that ceiling.
-    const AGY_PROMPT_CAP_BYTES: usize = 96 * 1024;
-    if prompt.len() > AGY_PROMPT_CAP_BYTES {
-        // Floor to a char boundary so we never split a multi-byte codepoint.
-        let mut end = AGY_PROMPT_CAP_BYTES;
-        while end > 0 && !prompt.is_char_boundary(end) {
+    let budget = AGY_PROMPT_CAP_BYTES
+        .saturating_sub(prompt.len())
+        .saturating_sub(SYSTEM_HEADROOM);
+    if tail.len() > budget && budget > 0 {
+        let mut end = budget;
+        while end > 0 && !tail.is_char_boundary(end) {
             end -= 1;
         }
-        prompt.truncate(end);
+        // truncate to last complete line so we don't leave a dangling prefix
+        if let Some(pos) = tail[..end].rfind('\n') {
+            end = pos + 1;
+        }
+        prompt.push_str(&tail[..end]);
+    } else {
+        prompt.push_str(&tail);
+    }
+
+    if prompt.len() > AGY_PROMPT_CAP_BYTES {
+        prompt.truncate(AGY_PROMPT_CAP_BYTES);
     }
 
     let mut cmd = tokio::process::Command::new(&bin);
@@ -586,7 +603,7 @@ async fn chat_agy(
             return Err(format!(
                 "AGY: превышено время ожидания ({} с) — ответ не получен.",
                 crate::consts::AGY_TIMEOUT_SECS
-            ))
+            ));
         }
     };
 
@@ -844,7 +861,6 @@ pub fn search_epg(data: &AppData, keywords: &[String], now: i64) -> Vec<AiSearch
     results
 }
 
-
 /// Executes an HTTP request for the AI chat backends (DeepSeek and Gemini), handling timeouts, error formatting, and basic auth headers.
 async fn execute_http_chat<T: serde::Serialize>(
     client: &Client,
@@ -865,9 +881,18 @@ async fn execute_http_chat<T: serde::Serialize>(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        let prefix = if api_name.is_empty() { "API error" } else { api_name };
-        return Err(format!("{} {}: {}", prefix, status, truncate_chars(&body, 200)));
+        let prefix = if api_name.is_empty() {
+            "API error"
+        } else {
+            api_name
+        };
+        return Err(format!(
+            "{} {}: {}",
+            prefix,
+            status,
+            truncate_chars(&body, 200)
+        ));
     }
-    
+
     Ok(resp)
 }

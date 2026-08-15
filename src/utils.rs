@@ -3,7 +3,9 @@ use std::fs::OpenOptions;
 use std::io::Write;
 
 pub fn main_log(msg: &str) {
-    let log_path = crate::consts::get_cache_dir().join("neon_iptv.log");
+    let dir = crate::consts::get_cache_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let log_path = dir.join("neon_iptv.log");
     let _ = OpenOptions::new()
         .create(true)
         .append(true)

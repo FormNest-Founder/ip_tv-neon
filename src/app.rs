@@ -26,7 +26,6 @@ pub struct AiState {
     pub loading: bool,
     pub chat_history: Vec<ChatMsg>,
     pub focus_results: bool,
-    pub chat_scroll: u16,
 }
 
 // ─── Navigation Sub-State ────────────────────────────────────────────────────
@@ -53,8 +52,6 @@ pub struct NavState {
     pub selected_radio_genre: String,
     pub search: String,
     pub edit_buf: String,
-    #[expect(dead_code)]
-    pub quality_popup: Option<usize>,
 }
 
 // ─── App State ───────────────────────────────────────────────────────────────
@@ -274,11 +271,25 @@ impl App {
     // ─── MPV Player ──────────────────────────────────────────────────────
 
     pub fn run_video(&mut self, url: &str, title: &str, sub_title: &str) {
-        self.player.run_video(url, title, sub_title, &self.config, self.debug, &mut self.status_msg);
+        self.player.run_video(
+            url,
+            title,
+            sub_title,
+            &self.config,
+            self.debug,
+            &mut self.status_msg,
+        );
     }
-    
+
     pub fn run_radio(&mut self, url: &str, title: &str, sub_title: &str) {
-        self.player.run_radio(url, title, sub_title, &self.config, self.debug, &mut self.status_msg);
+        self.player.run_radio(
+            url,
+            title,
+            sub_title,
+            &self.config,
+            self.debug,
+            &mut self.status_msg,
+        );
     }
 
     // ─── AI Playback ────────────────────────────────────────────────────
